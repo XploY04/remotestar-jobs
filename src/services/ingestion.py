@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 from src.database.operations import db
 from src.enrichment.enrichment_pipeline import EnrichmentPipeline
 from src.services.orchestrator import get_todays_fetchers, FETCHER_MAP
+from src.services.query_planner import QueryPlan, QueryPlannerService
 from src.utils.config import settings
 from src.utils.logger import setup_logger
 
@@ -30,7 +31,8 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
     if fetcher_classes is None:
         fetcher_classes = get_todays_fetchers()
     fetchers = [cls() for cls in fetcher_classes]
-    results = await asyncio.gather(*(_collect_jobs(fetcher) for fetcher in fetchers))
+    query_plans = await _generate_query_plans(fetchers)
+    results = await asyncio.gather(*(_collect_jobs(fetcher, query_plans.get(fetcher.source_name)) for fetcher in fetchers))
 
     # Thread-safe counters (only mutated inside async tasks, one event loop)
     per_source: Dict[str, Dict[str, Any]] = {}
@@ -58,6 +60,10 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
             processed = await pipeline.process_source(
                 source_name, raw_jobs, on_batch_ready=_save_batch
             )
+            try:
+                await db.save_query_metrics(source_name, query_plans.get(source_name), raw_jobs, processed, source_stats)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] Query metrics save failed: %s", source_name, exc)
 
             per_source[source_name] = {
                 "raw": len(raw_jobs),
@@ -90,6 +96,7 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
         "db": {"new": total_new, "skipped": total_skipped},
         "cleanup": cleanup_stats,
         "total_jobs": total_processed,
+        "query_planner": _query_planner_summary(query_plans),
         "ran_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -99,8 +106,26 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
     return summary
 
 
-async def _collect_jobs(fetcher) -> Tuple[str, List[Dict[str, Any]]]:
+async def _generate_query_plans(fetchers: List) -> Dict[str, QueryPlan]:
+    planner = QueryPlannerService()
+    source_names = [fetcher.source_name for fetcher in fetchers]
+    return await planner.generate_plans(source_names)
+
+
+def _query_planner_summary(query_plans: Dict[str, QueryPlan]) -> Dict[str, Any]:
+    plans = {source: plan.to_summary() for source, plan in query_plans.items()}
+    return {
+        "enabled": settings.enable_query_planner,
+        "generated_queries": sum(len(plan.queries) for plan in query_plans.values()),
+        "fallback_used": any(plan.fallback_used for plan in query_plans.values()) if query_plans else False,
+        "sources": plans,
+    }
+
+
+async def _collect_jobs(fetcher, query_plan: QueryPlan | None = None) -> Tuple[str, List[Dict[str, Any]]]:
     try:
+        if query_plan and hasattr(fetcher, "set_query_plan"):
+            fetcher.set_query_plan(query_plan)
         jobs = await fetcher.fetch_jobs()
         return fetcher.source_name, jobs
     except Exception as exc:  # pylint: disable=broad-except

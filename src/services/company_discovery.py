@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Set, Tuple
 import aiohttp
 
 from src.database.operations import db
+from src.services.query_planner import QueryPlan
 from src.utils.config import settings
 from src.utils.logger import setup_logger
 
@@ -27,8 +28,8 @@ logger = setup_logger(__name__)
 # ---------------------------------------------------------------------------
 PLATFORM_CONFIG = {
     "greenhouse": {
-        "site_filter": "site:boards.greenhouse.io",
-        "slug_pattern": re.compile(r"boards\.greenhouse\.io/([a-zA-Z0-9_-]+)"),
+        "site_filter": "(site:boards.greenhouse.io OR site:job-boards.greenhouse.io)",
+        "slug_pattern": re.compile(r"(?:boards|job-boards)\.greenhouse\.io/([a-zA-Z0-9_-]+)"),
     },
     "lever": {
         "site_filter": "site:jobs.lever.co",
@@ -103,6 +104,12 @@ SEED_COMPANIES: Dict[str, List[Tuple[str, str]]] = {
         ("databricks", "Databricks"),
         ("elastic", "Elastic"),
         ("confluent", "Confluent"),
+        ("phonepe", "PhonePe"),
+        ("rubrik", "Rubrik"),
+        ("netradyne", "Netradyne"),
+        ("hackerrank", "HackerRank"),
+        ("gleanwork", "Glean"),
+        ("moloco", "Moloco"),
         ("supabase", "Supabase"),
         ("vercel", "Vercel"),
         ("netlify", "Netlify"),
@@ -119,6 +126,9 @@ SEED_COMPANIES: Dict[str, List[Tuple[str, str]]] = {
     "lever": [
         ("spotify", "Spotify"),
         ("labelbox", "Labelbox"),
+        ("meesho", "Meesho"),
+        ("nium", "Nium"),
+        ("shopback-2", "ShopBack"),
     ],
     "ashby": [
         ("anthropic", "Anthropic"),
@@ -157,6 +167,10 @@ class CompanyDiscoveryService:
 
     def __init__(self) -> None:
         self.serpapi_key = settings.serpapi_key
+        self.query_plan: QueryPlan | None = None
+
+    def set_query_plan(self, query_plan: QueryPlan) -> None:
+        self.query_plan = query_plan
 
     # ------------------------------------------------------------------
     # Public API
@@ -262,7 +276,7 @@ class CompanyDiscoveryService:
 
                 # Use a subset of discovery queries per platform
                 platform_budget = max(1, QUERIES_PER_RUN // len(PLATFORM_CONFIG))
-                queries_for_platform = DISCOVERY_QUERIES[:platform_budget]
+                queries_for_platform = self._queries_for_platform(platform, platform_budget)
 
                 for query_term in queries_for_platform:
                     if queries_used >= QUERIES_PER_RUN:
@@ -287,6 +301,21 @@ class CompanyDiscoveryService:
 
         logger.info("SerpAPI discovery used %d/%d queries", queries_used, QUERIES_PER_RUN)
         return stats
+
+    def _queries_for_platform(self, platform: str, limit: int) -> List[str]:
+        if not self.query_plan:
+            return DISCOVERY_QUERIES[:limit]
+
+        queries = self.query_plan.queries
+        if not queries:
+            return DISCOVERY_QUERIES[:limit]
+
+        platforms = list(PLATFORM_CONFIG)
+        start = (platforms.index(platform) * limit) % len(queries)
+        selected = []
+        for index in range(limit):
+            selected.append(queries[(start + index) % len(queries)].query)
+        return selected
 
     async def _execute_serpapi_search(
         self, session: aiohttp.ClientSession, query: str
