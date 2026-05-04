@@ -59,6 +59,12 @@ async def ensure_indexes(db) -> None:
     )
     await companies.create_index([("is_active", ASCENDING)], name="idx_is_active")
 
+    query_metrics = db["query_metrics"]
+    await query_metrics.create_index(
+        [("source", ASCENDING), ("created_at", DESCENDING)],
+        name="idx_query_metrics_source_created",
+    )
+
 
 def normalize_doc(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Remap MongoDB _id to id for API compatibility."""

@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     # AI Enrichment
     enable_ai_enrichment: bool = True
 
+    # Query planning
+    enable_query_planner: bool = True
+    query_planner_model: str = "gpt-4o-mini"
+    query_planner_max_queries_per_source: int = 25
+    query_planner_posted_within_days: int = 15
+    query_planner_max_pages_per_query: int = 5
+
     # App settings
     environment: str = "development"
     log_level: str = "INFO"
