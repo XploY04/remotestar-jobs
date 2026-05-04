@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from src.agents import BaseFetcher
+from src.services.query_planner import QueryPlan
 from src.services.company_discovery import CompanyDiscoveryService
 from src.utils.logger import setup_logger
 
@@ -40,6 +41,9 @@ class ATSScraperFetcher(BaseFetcher):
     def __init__(self) -> None:
         super().__init__("ats_scraper")
         self.discovery = CompanyDiscoveryService()
+
+    def set_query_plan(self, query_plan: QueryPlan) -> None:
+        self.discovery.set_query_plan(query_plan)
 
     async def fetch_jobs(self) -> List[Dict[str, Any]]:
         """Fetch jobs from all 5 ATS platforms."""

@@ -31,6 +31,10 @@ class Database:
     def companies(self):
         return self.db["discovered_companies"]
 
+    @property
+    def query_metrics(self):
+        return self.db["query_metrics"]
+
     async def connect(self) -> None:
         """Initialize MongoDB connection and ensure indexes exist."""
 
@@ -296,8 +300,64 @@ class Database:
             "remote_count": remote_count,
         }
 
+    async def get_recent_query_metrics(self, source: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent query-planner metrics for feedback."""
+
+        if self.db is None:
+            return []
+
+        cursor = (
+            self.query_metrics.find({"source": source}, {"_id": 0})
+            .sort("created_at", DESCENDING)
+            .limit(limit)
+        )
+        return await cursor.to_list(length=limit)
+
+    async def save_query_metrics(
+        self,
+        source: str,
+        query_plan,
+        raw_jobs: List[Dict[str, Any]],
+        processed_jobs: List[Dict[str, Any]],
+        save_stats: Dict[str, int],
+    ) -> None:
+        """Store lightweight query metrics for future query-planner feedback."""
+
+        if self.db is None or query_plan is None:
+            return
+
+        raw_by_query: Dict[str, int] = {}
+        for job in raw_jobs:
+            key = job.get("_query") or job.get("_jsearch_query") or job.get("_adzuna_query") or "unknown"
+            raw_by_query[key] = raw_by_query.get(key, 0) + 1
+
+        country_counts: Dict[str, int] = {}
+        seniority_counts: Dict[str, int] = {}
+        for job in processed_jobs:
+            country = job.get("country") or "unknown"
+            seniority = job.get("seniority_level") or "unknown"
+            country_counts[country] = country_counts.get(country, 0) + 1
+            seniority_counts[seniority] = seniority_counts.get(seniority, 0) + 1
+
+        await self.query_metrics.insert_one({
+            "source": source,
+            "plan_id": query_plan.plan_id,
+            "created_at": datetime.now(timezone.utc),
+            "fallback_used": query_plan.fallback_used,
+            "query_count": len(query_plan.queries),
+            "raw_jobs": len(raw_jobs),
+            "processed_jobs": len(processed_jobs),
+            "new_jobs": save_stats.get("new", 0),
+            "skipped_jobs": save_stats.get("skipped", 0),
+            "raw_by_query": raw_by_query,
+            "country_counts": country_counts,
+            "seniority_counts": seniority_counts,
+        })
+
     async def cleanup_expired_jobs(self, default_expiry_days: int = 45) -> Dict[str, int]:
-        """Remove jobs past their application_deadline or older than default_expiry_days."""
+        """Soft-archive jobs past their application_deadline or older than
+        default_expiry_days. Sets is_deleted=true and archived_at; the row stays
+        in Mongo so admins can restore it via the candidate API."""
 
         if self.db is None:
             raise RuntimeError("Database not connected")
@@ -305,13 +365,19 @@ class Database:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=default_expiry_days)
 
-        condition = {"$or": [
-            {"application_deadline": {"$ne": None, "$lt": now}},
-            {"application_deadline": None, "posted_at": {"$lt": cutoff}},
-        ]}
+        condition = {
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"application_deadline": {"$ne": None, "$lt": now}},
+                {"application_deadline": None, "posted_at": {"$lt": cutoff}},
+            ],
+        }
 
-        result = await self.jobs.delete_many(condition)
-        return {"deleted": result.deleted_count}
+        result = await self.jobs.update_many(
+            condition,
+            {"$set": {"is_deleted": True, "archived_at": now}},
+        )
+        return {"archived": result.modified_count}
 
 
 db = Database()
