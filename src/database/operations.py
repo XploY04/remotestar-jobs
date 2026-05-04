@@ -297,7 +297,9 @@ class Database:
         }
 
     async def cleanup_expired_jobs(self, default_expiry_days: int = 45) -> Dict[str, int]:
-        """Remove jobs past their application_deadline or older than default_expiry_days."""
+        """Soft-archive jobs past their application_deadline or older than
+        default_expiry_days. Sets is_deleted=true and archived_at; the row stays
+        in Mongo so admins can restore it via the candidate API."""
 
         if self.db is None:
             raise RuntimeError("Database not connected")
@@ -305,13 +307,19 @@ class Database:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=default_expiry_days)
 
-        condition = {"$or": [
-            {"application_deadline": {"$ne": None, "$lt": now}},
-            {"application_deadline": None, "posted_at": {"$lt": cutoff}},
-        ]}
+        condition = {
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"application_deadline": {"$ne": None, "$lt": now}},
+                {"application_deadline": None, "posted_at": {"$lt": cutoff}},
+            ],
+        }
 
-        result = await self.jobs.delete_many(condition)
-        return {"deleted": result.deleted_count}
+        result = await self.jobs.update_many(
+            condition,
+            {"$set": {"is_deleted": True, "archived_at": now}},
+        )
+        return {"archived": result.modified_count}
 
 
 db = Database()

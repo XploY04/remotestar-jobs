@@ -83,7 +83,7 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
     )
 
     cleanup_stats = await db.cleanup_expired_jobs()
-    logger.info("Cleanup: deleted %d expired jobs", cleanup_stats["deleted"])
+    logger.info("Cleanup: archived %d expired jobs", cleanup_stats["archived"])
 
     summary = {
         "sources": per_source,
