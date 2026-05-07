@@ -57,9 +57,9 @@ class Database:
             logger.info("MongoDB disconnected")
 
     async def save_jobs(self, jobs: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Insert jobs while skipping duplicates."""
+        """Insert jobs, restore expired duplicates, and skip active/archive hits."""
 
-        stats = {"new": 0, "skipped": 0}
+        stats = {"new": 0, "skipped": 0, "restored": 0}
 
         if self.db is None:
             raise RuntimeError("Database not connected")
@@ -70,59 +70,35 @@ class Database:
                 title_company_hash = job_data.get("title_company_hash") or self._hash_title_company(
                     job_data.get("title", ""), job_data.get("company", "")
                 )
+                doc = self._build_job_doc(job_id, title_company_hash, job_data)
 
-                if await self.jobs.find_one({"_id": job_id}):
+                duplicate = await self.jobs.find_one({"_id": job_id})
+                if duplicate is None:
+                    duplicate = await self.jobs.find_one({"title_company_hash": title_company_hash})
+
+                if duplicate:
+                    if duplicate.get("is_archived") is True:
+                        stats["skipped"] += 1
+                        continue
+                    if duplicate.get("is_deleted") is True:
+                        update_doc = doc.copy()
+                        update_doc.pop("_id", None)
+                        update_doc["is_deleted"] = False
+                        await self.jobs.update_one(
+                            {"_id": duplicate["_id"]},
+                            {
+                                "$set": update_doc,
+                                "$unset": {
+                                    "deleted_at": "",
+                                    "delete_reason": "",
+                                    "pinecone_embedded_at": "",
+                                },
+                            },
+                        )
+                        stats["restored"] += 1
+                        continue
                     stats["skipped"] += 1
                     continue
-
-                if await self.jobs.find_one({"title_company_hash": title_company_hash}):
-                    stats["skipped"] += 1
-                    continue
-
-                doc = {
-                    "_id": job_id,
-                    "source": job_data.get("source", ""),
-                    "source_id": str(job_data.get("source_id", "")),
-                    "source_url": job_data.get("source_url"),
-                    "title": job_data.get("title", ""),
-                    "company": job_data.get("company", "Unknown"),
-                    "company_logo": job_data.get("company_logo"),
-                    "company_website": job_data.get("company_website"),
-                    "description": job_data.get("description", ""),
-                    "short_description": job_data.get("short_description"),
-                    "location": job_data.get("location"),
-                    "country": job_data.get("country"),
-                    "city": job_data.get("city"),
-                    "state": job_data.get("state"),
-                    "is_remote": job_data.get("is_remote"),
-                    "work_arrangement": job_data.get("work_arrangement"),
-                    "latitude": job_data.get("latitude"),
-                    "longitude": job_data.get("longitude"),
-                    "employment_type": job_data.get("employment_type"),
-                    "seniority_level": job_data.get("seniority_level"),
-                    "department": job_data.get("department"),
-                    "category": job_data.get("category"),
-                    "salary_min": self._to_str(job_data.get("salary_min")),
-                    "salary_max": self._to_str(job_data.get("salary_max")),
-                    "salary_currency": job_data.get("salary_currency"),
-                    "salary_period": job_data.get("salary_period"),
-                    "skills": job_data.get("skills"),
-                    "required_experience_years": job_data.get("required_experience_years"),
-                    "required_education": job_data.get("required_education"),
-                    "key_responsibilities": job_data.get("key_responsibilities"),
-                    "nice_to_have_skills": job_data.get("nice_to_have_skills"),
-                    "benefits": job_data.get("benefits"),
-                    "visa_sponsorship": job_data.get("visa_sponsorship"),
-                    "posted_at": job_data.get("posted_at"),
-                    "application_deadline": job_data.get("application_deadline"),
-                    "fetched_at": datetime.now(timezone.utc),
-                    "apply_url": job_data.get("apply_url", ""),
-                    "apply_options": job_data.get("apply_options"),
-                    "tags": job_data.get("tags"),
-                    "quality_score": job_data.get("quality_score"),
-                    "raw_data": job_data.get("raw_data"),
-                    "title_company_hash": title_company_hash,
-                }
 
                 await self.jobs.insert_one(doc)
                 stats["new"] += 1
@@ -132,6 +108,57 @@ class Database:
                 stats["skipped"] += 1
 
         return stats
+
+    def _build_job_doc(
+        self,
+        job_id: str,
+        title_company_hash: str,
+        job_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "_id": job_id,
+            "source": job_data.get("source", ""),
+            "source_id": str(job_data.get("source_id", "")),
+            "source_url": job_data.get("source_url"),
+            "title": job_data.get("title", ""),
+            "company": job_data.get("company", "Unknown"),
+            "company_logo": job_data.get("company_logo"),
+            "company_website": job_data.get("company_website"),
+            "description": job_data.get("description", ""),
+            "short_description": job_data.get("short_description"),
+            "location": job_data.get("location"),
+            "country": job_data.get("country"),
+            "city": job_data.get("city"),
+            "state": job_data.get("state"),
+            "is_remote": job_data.get("is_remote"),
+            "work_arrangement": job_data.get("work_arrangement"),
+            "latitude": job_data.get("latitude"),
+            "longitude": job_data.get("longitude"),
+            "employment_type": job_data.get("employment_type"),
+            "seniority_level": job_data.get("seniority_level"),
+            "department": job_data.get("department"),
+            "category": job_data.get("category"),
+            "salary_min": self._to_str(job_data.get("salary_min")),
+            "salary_max": self._to_str(job_data.get("salary_max")),
+            "salary_currency": job_data.get("salary_currency"),
+            "salary_period": job_data.get("salary_period"),
+            "skills": job_data.get("skills"),
+            "required_experience_years": job_data.get("required_experience_years"),
+            "required_education": job_data.get("required_education"),
+            "key_responsibilities": job_data.get("key_responsibilities"),
+            "nice_to_have_skills": job_data.get("nice_to_have_skills"),
+            "benefits": job_data.get("benefits"),
+            "visa_sponsorship": job_data.get("visa_sponsorship"),
+            "posted_at": job_data.get("posted_at"),
+            "application_deadline": job_data.get("application_deadline"),
+            "fetched_at": datetime.now(timezone.utc),
+            "apply_url": job_data.get("apply_url", ""),
+            "apply_options": job_data.get("apply_options"),
+            "tags": job_data.get("tags"),
+            "quality_score": job_data.get("quality_score"),
+            "raw_data": job_data.get("raw_data"),
+            "title_company_hash": title_company_hash,
+        }
 
     @staticmethod
     def _hash_title_company(title: str, company: str) -> str:
@@ -158,7 +185,7 @@ class Database:
     ) -> Dict[str, Any]:
         """Build a MongoDB filter dict from query parameters."""
 
-        query: Dict[str, Any] = {}
+        query: Dict[str, Any] = self.active_job_filter()
 
         if search:
             query["$text"] = {"$search": search}
@@ -183,6 +210,13 @@ class Database:
             }
 
         return query
+
+    @staticmethod
+    def active_job_filter() -> Dict[str, Any]:
+        return {
+            "is_archived": {"$ne": True},
+            "is_deleted": {"$ne": True},
+        }
 
     async def count_jobs(
         self,
@@ -253,7 +287,10 @@ class Database:
         if self.db is None:
             raise RuntimeError("Database not connected")
 
-        doc = await self.jobs.find_one({"_id": job_id}, {"raw_data": 0})
+        doc = await self.jobs.find_one(
+            {"_id": job_id, **self.active_job_filter()},
+            {"raw_data": 0},
+        )
         return normalize_doc(doc)
 
     async def get_filter_options(self) -> Dict[str, Any]:
@@ -263,7 +300,7 @@ class Database:
             raise RuntimeError("Database not connected")
 
         seniority_pipeline = [
-            {"$match": {"seniority_level": {"$ne": None}}},
+            {"$match": {**self.active_job_filter(), "seniority_level": {"$ne": None}}},
             {"$group": {"_id": "$seniority_level", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
         ]
@@ -273,7 +310,7 @@ class Database:
         ]
 
         category_pipeline = [
-            {"$match": {"category": {"$ne": None}}},
+            {"$match": {**self.active_job_filter(), "category": {"$ne": None}}},
             {"$group": {"_id": "$category", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
         ]
@@ -283,6 +320,7 @@ class Database:
         ]
 
         source_pipeline = [
+            {"$match": self.active_job_filter()},
             {"$group": {"_id": "$source", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
         ]
@@ -291,7 +329,7 @@ class Database:
             async for doc in self.jobs.aggregate(source_pipeline)
         ]
 
-        remote_count = await self.jobs.count_documents({"is_remote": True})
+        remote_count = await self.jobs.count_documents({**self.active_job_filter(), "is_remote": True})
 
         return {
             "seniority": seniority,
@@ -349,15 +387,14 @@ class Database:
             "processed_jobs": len(processed_jobs),
             "new_jobs": save_stats.get("new", 0),
             "skipped_jobs": save_stats.get("skipped", 0),
+            "restored_jobs": save_stats.get("restored", 0),
             "raw_by_query": raw_by_query,
             "country_counts": country_counts,
             "seniority_counts": seniority_counts,
         })
 
     async def cleanup_expired_jobs(self, default_expiry_days: int = 45) -> Dict[str, int]:
-        """Soft-archive jobs past their application_deadline or older than
-        default_expiry_days. Sets is_deleted=true and archived_at; the row stays
-        in Mongo so admins can restore it via the candidate API."""
+        """Soft-delete jobs past their application_deadline or default age."""
 
         if self.db is None:
             raise RuntimeError("Database not connected")
@@ -366,6 +403,7 @@ class Database:
         cutoff = now - timedelta(days=default_expiry_days)
 
         condition = {
+            "is_archived": {"$ne": True},
             "is_deleted": {"$ne": True},
             "$or": [
                 {"application_deadline": {"$ne": None, "$lt": now}},
@@ -375,9 +413,9 @@ class Database:
 
         result = await self.jobs.update_many(
             condition,
-            {"$set": {"is_deleted": True, "archived_at": now}},
+            {"$set": {"is_deleted": True, "deleted_at": now, "delete_reason": "expired"}},
         )
-        return {"archived": result.modified_count}
+        return {"deleted": result.modified_count}
 
 
 db = Database()

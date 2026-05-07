@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from src.database.models import ensure_indexes, normalize_doc
 from src.database.operations import Database
 
@@ -83,6 +83,129 @@ async def test_save_jobs_with_duplicates():
     assert stats2["new"] == 0
 
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_save_jobs_restores_deleted_duplicate():
+    db = Database()
+    await db.connect()
+    job_data = _job_data("restore-deleted")
+    job_id = f"{job_data['source']}_{job_data['source_id']}"
+    title_company_hash = db._hash_title_company(job_data["title"], job_data["company"])
+
+    await db.jobs.delete_many({"_id": job_id})
+    await db.jobs.insert_one({
+        "_id": job_id,
+        "source": job_data["source"],
+        "source_id": job_data["source_id"],
+        "title": job_data["title"],
+        "company": job_data["company"],
+        "description": "old description",
+        "apply_url": "https://old.example.com",
+        "posted_at": datetime.now(timezone.utc) - timedelta(days=20),
+        "title_company_hash": title_company_hash,
+        "is_deleted": True,
+        "deleted_at": datetime.now(timezone.utc),
+        "delete_reason": "expired",
+    })
+
+    stats = await db.save_jobs([job_data])
+    restored = await db.jobs.find_one({"_id": job_id})
+
+    assert stats["restored"] == 1
+    assert restored["is_deleted"] is False
+    assert "deleted_at" not in restored
+    assert "delete_reason" not in restored
+    assert restored["apply_url"] == job_data["apply_url"]
+
+    await db.jobs.delete_many({"_id": job_id})
+    await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_save_jobs_skips_archived_duplicate():
+    db = Database()
+    await db.connect()
+    job_data = _job_data("skip-archived")
+    job_id = f"{job_data['source']}_{job_data['source_id']}"
+    title_company_hash = db._hash_title_company(job_data["title"], job_data["company"])
+
+    await db.jobs.delete_many({"_id": job_id})
+    await db.jobs.insert_one({
+        "_id": job_id,
+        "source": job_data["source"],
+        "source_id": job_data["source_id"],
+        "title": job_data["title"],
+        "company": job_data["company"],
+        "description": "archived description",
+        "apply_url": "https://archived.example.com",
+        "posted_at": datetime.now(timezone.utc),
+        "title_company_hash": title_company_hash,
+        "is_archived": True,
+        "archived_at": datetime.now(timezone.utc),
+    })
+
+    stats = await db.save_jobs([job_data])
+    archived = await db.jobs.find_one({"_id": job_id})
+
+    assert stats["skipped"] == 1
+    assert stats["restored"] == 0
+    assert archived["is_archived"] is True
+    assert archived["apply_url"] == "https://archived.example.com"
+
+    await db.jobs.delete_many({"_id": job_id})
+    await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_jobs_soft_deletes_without_archiving():
+    db = Database()
+    await db.connect()
+    job_data = _job_data("cleanup-expired")
+    job_id = f"{job_data['source']}_{job_data['source_id']}"
+
+    await db.jobs.delete_many({"_id": job_id})
+    doc = db._build_job_doc(job_id, db._hash_title_company(job_data["title"], job_data["company"]), job_data)
+    doc["application_deadline"] = datetime.now(timezone.utc) - timedelta(days=1)
+    await db.jobs.insert_one(doc)
+
+    stats = await db.cleanup_expired_jobs()
+    deleted = await db.jobs.find_one({"_id": job_id})
+
+    assert stats["deleted"] >= 1
+    assert deleted["is_deleted"] is True
+    assert deleted["delete_reason"] == "expired"
+    assert "deleted_at" in deleted
+    assert "archived_at" not in deleted
+
+    await db.jobs.delete_many({"_id": job_id})
+    await db.disconnect()
+
+
+def test_active_job_filter_is_default_query_base():
+    db = Database()
+    assert db._build_filter() == {
+        "is_archived": {"$ne": True},
+        "is_deleted": {"$ne": True},
+    }
+
+
+def _job_data(source_id: str):
+    return {
+        "source": "test",
+        "source_id": source_id,
+        "title": f"Test Backend Engineer {source_id}",
+        "company": "TestCompany",
+        "description": "Test description",
+        "location": {"city": "Test City", "country": "US", "remote": False},
+        "employment_type": "FULLTIME",
+        "salary_min": "100000",
+        "salary_max": "150000",
+        "salary_currency": "USD",
+        "apply_url": "https://example.com",
+        "posted_at": datetime.now(timezone.utc),
+        "raw_data": {},
+    }
 
 
 def test_normalize_doc():
