@@ -38,23 +38,28 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
     per_source: Dict[str, Dict[str, Any]] = {}
     total_new = 0
     total_skipped = 0
+    total_restored = 0
     total_processed = 0
 
     async def _process_source(source_name: str, raw_jobs: List[Dict[str, Any]]) -> None:
-        nonlocal total_new, total_skipped, total_processed
+        nonlocal total_new, total_skipped, total_restored, total_processed
 
         if not raw_jobs:
-            per_source[source_name] = {"raw": 0, "processed": 0, "new": 0, "skipped": 0}
+            per_source[source_name] = {"raw": 0, "processed": 0, "new": 0, "skipped": 0, "restored": 0}
             return
 
-        source_stats = {"new": 0, "skipped": 0}
+        source_stats = {"new": 0, "skipped": 0, "restored": 0}
 
         async def _save_batch(batch: List[Dict[str, Any]]) -> None:
             """Called by the pipeline after each batch (~5 jobs) is processed."""
             stats = await db.save_jobs(batch)
             source_stats["new"] += stats["new"]
             source_stats["skipped"] += stats["skipped"]
-            logger.info("[%s] Batch saved — new=%d skipped=%d", source_name, stats["new"], stats["skipped"])
+            source_stats["restored"] += stats["restored"]
+            logger.info(
+                "[%s] Batch saved: new=%d skipped=%d restored=%d",
+                source_name, stats["new"], stats["skipped"], stats["restored"],
+            )
 
         try:
             processed = await pipeline.process_source(
@@ -70,30 +75,35 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
                 "processed": len(processed),
                 "new": source_stats["new"],
                 "skipped": source_stats["skipped"],
+                "restored": source_stats["restored"],
             }
             total_new += source_stats["new"]
             total_skipped += source_stats["skipped"]
+            total_restored += source_stats["restored"]
             total_processed += len(processed)
 
-            logger.info("[%s] Done — raw=%d processed=%d new=%d skipped=%d",
+            logger.info("[%s] Done: raw=%d processed=%d new=%d skipped=%d restored=%d",
                         source_name, len(raw_jobs), len(processed),
-                        source_stats["new"], source_stats["skipped"])
+                        source_stats["new"], source_stats["skipped"], source_stats["restored"])
 
         except Exception as exc:
             logger.error("[%s] Failed: %s", source_name, exc, exc_info=True)
-            per_source[source_name] = {"raw": len(raw_jobs), "processed": 0, "new": 0, "skipped": 0, "error": str(exc)}
+            per_source[source_name] = {
+                "raw": len(raw_jobs), "processed": 0, "new": 0,
+                "skipped": 0, "restored": 0, "error": str(exc),
+            }
 
-    # Process ALL sources concurrently — each batch saves independently
+    # Process ALL sources concurrently; each batch saves independently
     await asyncio.gather(
         *(_process_source(name, jobs) for name, jobs in results)
     )
 
     cleanup_stats = await db.cleanup_expired_jobs()
-    logger.info("Cleanup: archived %d expired jobs", cleanup_stats["archived"])
+    logger.info("Cleanup: deleted %d expired jobs", cleanup_stats["deleted"])
 
     summary = {
         "sources": per_source,
-        "db": {"new": total_new, "skipped": total_skipped},
+        "db": {"new": total_new, "skipped": total_skipped, "restored": total_restored},
         "cleanup": cleanup_stats,
         "total_jobs": total_processed,
         "query_planner": _query_planner_summary(query_plans),
@@ -101,7 +111,8 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
     }
 
     logger.info(
-        "Ingestion finished | total=%d new=%d skipped=%d", total_processed, total_new, total_skipped
+        "Ingestion finished | total=%d new=%d skipped=%d restored=%d",
+        total_processed, total_new, total_skipped, total_restored,
     )
     return summary
 

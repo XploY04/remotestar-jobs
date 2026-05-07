@@ -10,6 +10,7 @@ Pipeline:
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -137,9 +138,9 @@ async def embed_jobs(job_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     index = _get_pinecone_index()
 
     if job_ids:
-        query = {"_id": {"$in": job_ids}}
+        query = {"_id": {"$in": job_ids}, **db.active_job_filter()}
     else:
-        query = {"pinecone_embedded_at": {"$exists": False}}
+        query = {"pinecone_embedded_at": {"$exists": False}, **db.active_job_filter()}
 
     jobs = await db.jobs.find(query, {"raw_data": 0}).to_list(length=None)
     logger.info("Embedding %d new jobs for Pinecone", len(jobs))
@@ -284,7 +285,7 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
 
     _progress("embedding", "Embedding your profile...", 5)
     user_embedding = _embed_text(user_text)
-    user_titles = _collect_user_titles(user)
+    user_titles = _collect_user_titles(user, resume_doc)
     user_level = user.get("seniority_level")
     user_location = user.get("location")
     user_years = user.get("years_of_experience")
@@ -315,7 +316,7 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     # Fetch full job docs from MongoDB for the matched IDs
     job_ids = [m.id for m in results.matches]
     job_docs = await db.jobs.find(
-        {"_id": {"$in": job_ids}},
+        {"_id": {"$in": job_ids}, **db.active_job_filter()},
         {"raw_data": 0, "description": 0},
     ).to_list(length=None)
     job_lookup = {j["_id"]: j for j in job_docs}
@@ -334,6 +335,7 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
 
         signals = {
             "vector_similarity": vector_score,
+            "skills_match": vector_score,
             "title_similarity": title_similarity_score(user_titles, job.get("title", "")),
             "seniority_fit": seniority_fit_score(user_level, job.get("seniority_level")),
             "location_match": location_match_score(user_location, job.get("country"), job.get("is_remote")),
@@ -388,11 +390,32 @@ def _compute_weighted_score(signals: Dict[str, float]) -> int:
     return max(0, min(100, round(total * 100)))
 
 
-def _collect_user_titles(user: dict) -> List[str]:
+def _collect_user_titles(user: dict, resume_doc: Optional[dict] = None) -> List[str]:
     titles = []
     if user.get("role_focus"):
         titles.append(user["role_focus"])
-    return titles
+
+    if resume_doc:
+        profile = resume_doc.get("editable_profile") or {}
+        for exp in (profile.get("experiences") or []):
+            position = (exp.get("position") or "").strip()
+            if position and not _is_intern_position(position):
+                titles.append(position)
+
+    deduped = []
+    seen = set()
+    for title in titles:
+        key = title.lower().strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(title)
+    return deduped
+
+
+def _is_intern_position(position: str) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", position.lower())
+    return any(token in tokens for token in ("intern", "internship", "trainee", "apprentice"))
 
 
 async def _ai_refine(
