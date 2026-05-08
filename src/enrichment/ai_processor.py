@@ -172,9 +172,14 @@ class AIProcessor:
                 jobs_block.append(f"=== JOB {idx + 1} of {n} ===\n{raw_str}")
 
             joined = "\n\n".join(jobs_block)
-            prompt = f'Extract {n} jobs from source "{source}". Return a JSON array with exactly {n} objects in the same order.\n\n{joined}'
+            prompt = (
+                f'Extract {n} jobs from source "{source}". Return JSON shaped as '
+                f'{{"jobs": [...]}} where "jobs" is an array of exactly {n} objects '
+                f"in the same order as the input.\n\n{joined}"
+            )
 
             result = self._call_ai(prompt)
+            result = self._unwrap_array(result, n)
 
             if isinstance(result, list) and len(result) == n:
                 logger.info(f"[{source}] Batch OK: {n} jobs in 1 API call")
@@ -195,6 +200,21 @@ class AIProcessor:
 
     def _fallback_to_single(self, source: str, chunk: List[Dict[str, Any]]) -> List[Optional[Dict[str, Any]]]:
         return [self.process_raw_job(source, raw_job) for raw_job in chunk]
+
+    @staticmethod
+    def _unwrap_array(result: Any, n: int) -> Any:
+        """OpenAI's json_object mode forces an object wrapper, so the array often
+        comes back as {"jobs": [...]} or similar. Unwrap to the inner list."""
+        if not isinstance(result, dict):
+            return result
+        for key in ("jobs", "results", "items", "data", "output", "extracted"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return value
+        list_values = [v for v in result.values() if isinstance(v, list)]
+        if len(list_values) == 1:
+            return list_values[0]
+        return result
 
     # ------------------------------------------------------------------
     # Provider dispatch
