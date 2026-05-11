@@ -25,9 +25,7 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Max companies to scrape per platform per run
-MAX_COMPANIES_PER_PLATFORM = 50
-# Max jobs per company (avoid huge boards like Google)
+# Max jobs per company (avoid huge boards like Google blowing up AI cost)
 MAX_JOBS_PER_COMPANY = 50
 # Concurrent requests per platform
 CONCURRENCY = 5
@@ -72,7 +70,6 @@ class ATSScraperFetcher(BaseFetcher):
         ) as session:
             for platform, scraper_fn in platform_scrapers.items():
                 companies = await self.discovery.get_companies_for_platform(platform)
-                companies = companies[:MAX_COMPANIES_PER_PLATFORM]
 
                 if not companies:
                     logger.info("[%s] No companies for %s", self.source_name, platform)
