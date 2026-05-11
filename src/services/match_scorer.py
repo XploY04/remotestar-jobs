@@ -25,24 +25,37 @@ WEIGHTS = {
 # Seniority levels in order (index = rank)
 SENIORITY_ORDER = ["intern", "junior", "mid", "senior", "staff", "principal", "lead", "manager"]
 
-# Normalized role-to-category mapping for title matching
+# Normalized role-to-category mapping for title matching. Keys MUST match the
+# job-side Category Literal in src/enrichment/ai_processor.py.
 ROLE_CATEGORY_MAP = {
-    "backend": ["backend", "server", "api", "microservices", "systems"],
-    "frontend": ["frontend", "front-end", "ui", "react", "angular", "vue"],
+    "backend": ["backend", "back-end", "server", "api", "microservices", "systems engineer"],
+    "frontend": ["frontend", "front-end", "ui engineer", "react developer", "angular", "vue"],
     "fullstack": ["fullstack", "full-stack", "full stack"],
-    "devops": ["devops", "infrastructure", "platform", "sre", "reliability", "cloud"],
-    "data": ["data engineer", "data pipeline", "etl", "data platform"],
-    "ml": ["machine learning", "ml engineer", "ai engineer", "deep learning", "nlp"],
     "mobile": ["mobile", "ios", "android", "flutter", "react native"],
-    "security": ["security", "cybersecurity", "infosec", "appsec", "pentest"],
-    "qa": ["qa", "quality", "test engineer", "sdet", "automation"],
+    "devops": ["devops", "infrastructure", "cloud engineer", "kubernetes"],
+    "sre": ["sre", "site reliability", "platform engineer", "reliability"],
+    "data": ["data engineer", "data pipeline", "etl", "data platform", "analytics engineer"],
+    "ml": ["machine learning", "ml engineer", "ai engineer", "deep learning", "nlp", "mlops"],
+    "security": ["security", "cybersecurity", "infosec", "appsec", "pentest", "soc analyst"],
+    "qa": ["qa", "quality assurance", "test engineer", "sdet", "test automation"],
+    "design": ["designer", "ux", "ui designer", "product designer", "design lead"],
+    "product": ["product manager", "product owner", "product analyst", " pm "],
+    "general": [],   # catch-all, matched only via the no-keyword fallback path
 }
 
-# Common country name variations
-COUNTRY_ALIASES = {
-    "us": ["us", "usa", "united states", "america"],
-    "gb": ["gb", "uk", "united kingdom", "england", "britain"],
-    "in": ["in", "india"],
+# Legacy free-form country variants for jobs ingested before v3 (when country
+# became a Literal of ISO alpha-2 codes). New jobs already arrive normalized.
+_LEGACY_COUNTRY_ALIASES = {
+    "us": ("usa", "united states", "america", "u.s.", "u.s.a."),
+    "gb": ("uk", "united kingdom", "england", "britain", "great britain"),
+    "in": ("india",),
+    "ae": ("uae", "united arab emirates"),
+    "de": ("germany", "deutschland"),
+    "fr": ("france",),
+    "nl": ("netherlands", "holland"),
+    "ca": ("canada",),
+    "au": ("australia",),
+    "sg": ("singapore",),
 }
 
 
@@ -186,9 +199,16 @@ def location_match_score(
 
 
 def _extract_country(location_str: str) -> Optional[str]:
-    """Extract normalized country code from a location string."""
+    """Extract ISO alpha-2 country code from a free-form location string.
+
+    Used for user.location which is typed by humans (e.g. "Bangalore, India").
+    """
     location_lower = location_str.lower().strip()
-    for code, aliases in COUNTRY_ALIASES.items():
+    if len(location_lower) == 2 and location_lower.isalpha():
+        return location_lower
+    for code, aliases in _LEGACY_COUNTRY_ALIASES.items():
+        if code in location_lower:
+            return code
         for alias in aliases:
             if alias in location_lower:
                 return code
@@ -196,8 +216,16 @@ def _extract_country(location_str: str) -> Optional[str]:
 
 
 def _normalize_country(country: str) -> Optional[str]:
+    """Normalize a job.country value to lowercase ISO alpha-2.
+
+    Post-v3 jobs already store the canonical form, so this is mostly a
+    lowercase. Pre-v3 jobs may have full names like "United States"; the
+    legacy alias table covers the most common ones.
+    """
     country_lower = country.lower().strip()
-    for code, aliases in COUNTRY_ALIASES.items():
+    if len(country_lower) == 2 and country_lower.isalpha():
+        return country_lower
+    for code, aliases in _LEGACY_COUNTRY_ALIASES.items():
         if country_lower == code or country_lower in aliases:
             return code
     return country_lower
