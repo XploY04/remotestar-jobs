@@ -24,25 +24,50 @@ PROTECTED = {
 }
 
 
-async def reenrich_stale(db, limit: Optional[int] = None, batch_size: int = 100) -> Dict[str, Any]:
-    """Find jobs where prompt_version is missing or older than current, then re-run them.
+async def reenrich_stale(
+    db,
+    limit: Optional[int] = None,
+    batch_size: int = 100,
+    mode: str = "stale",
+) -> Dict[str, Any]:
+    """Re-run AI enrichment on a target subset of jobs.
 
-    `limit` caps the number of jobs processed in this run (None = all).
-    Returns {scanned, reenriched, errors, per_source}.
+    mode:
+      "stale"    — jobs where prompt_version is missing or != current
+      "low_info" — jobs with empty skills or null seniority_level
+                   (raw_data must still be present so we can re-run)
+
+    `limit` caps the number of jobs processed (None = all).
+    Returns {scanned, reenriched, errors, per_source, mode}.
     """
 
     if db.db is None:
         raise RuntimeError("Database not connected")
 
-    criteria = {
+    base = {
         "is_archived": {"$ne": True},
         "is_deleted": {"$ne": True},
         "raw_data": {"$exists": True, "$ne": None},
-        "$or": [
-            {"prompt_version": {"$exists": False}},
-            {"prompt_version": {"$ne": PROMPT_VERSION}},
-        ],
     }
+    if mode == "stale":
+        criteria = {
+            **base,
+            "$or": [
+                {"prompt_version": {"$exists": False}},
+                {"prompt_version": {"$ne": PROMPT_VERSION}},
+            ],
+        }
+    elif mode == "low_info":
+        criteria = {
+            **base,
+            "$or": [
+                {"skills": {"$exists": False}},
+                {"skills": {"$size": 0}},
+                {"seniority_level": {"$in": [None, ""]}},
+            ],
+        }
+    else:
+        raise ValueError(f"unknown mode: {mode!r}")
 
     total = await db.jobs.count_documents(criteria)
     if total == 0:
@@ -77,6 +102,7 @@ async def reenrich_stale(db, limit: Optional[int] = None, batch_size: int = 100)
         logger.info("Re-enriched %d/%d", reenriched, total)
 
     summary = {
+        "mode": mode,
         "scanned": total,
         "reenriched": reenriched,
         "errors": errors,

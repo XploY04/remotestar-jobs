@@ -45,10 +45,10 @@ async def _run_cleanup() -> dict:
     return result
 
 
-async def _run_reenrich_stale(limit: int | None) -> dict:
+async def _run_reenrich(limit: int | None, mode: str) -> dict:
     from src.services.reenrich import reenrich_stale
     await db.connect()
-    result = await reenrich_stale(db, limit=limit)
+    result = await reenrich_stale(db, limit=limit, mode=mode)
     await db.disconnect()
     return result
 
@@ -92,10 +92,15 @@ def main() -> None:
         help="Re-run AI enrichment on jobs with outdated prompt_version then exit",
     )
     parser.add_argument(
+        "--reenrich-low-info",
+        action="store_true",
+        help="Re-run AI enrichment on jobs with empty skills or null seniority then exit",
+    )
+    parser.add_argument(
         "--reenrich-limit",
         type=int,
         default=None,
-        help="Cap the number of jobs re-enriched (default: all stale)",
+        help="Cap the number of jobs re-enriched (default: all matching)",
     )
 
     args = parser.parse_args()
@@ -121,7 +126,12 @@ def main() -> None:
         return
 
     if args.reenrich_stale:
-        result = asyncio.run(_run_reenrich_stale(args.reenrich_limit))
+        result = asyncio.run(_run_reenrich(args.reenrich_limit, mode="stale"))
+        print(json.dumps(result, indent=2, default=str))  # noqa: T201
+        return
+
+    if args.reenrich_low_info:
+        result = asyncio.run(_run_reenrich(args.reenrich_limit, mode="low_info"))
         print(json.dumps(result, indent=2, default=str))  # noqa: T201
         return
 
