@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     # the description (Workable, SmartRecruiters mostly).
     enable_ats_detail_fetch: bool = True
     ats_detail_min_description: int = 200
-    ats_detail_max_per_company: int = 30
 
     # Query planning
     enable_query_planner: bool = True

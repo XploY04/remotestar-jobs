@@ -133,8 +133,7 @@ class ATSScraperFetcher(BaseFetcher):
             return
 
         min_len = settings.ats_detail_min_description
-        cap = settings.ats_detail_max_per_company
-        targets = [j for j in jobs if len(j.get("description") or "") < min_len][:cap]
+        targets = [j for j in jobs if len(j.get("description") or "") < min_len]
         if not targets:
             return
 
