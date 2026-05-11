@@ -70,14 +70,6 @@ async def get_filters() -> dict:
     return await db.get_filter_options()
 
 
-@router.get("/companies/popular")
-async def get_popular_companies(limit: int = Query(20, ge=1, le=100)) -> dict:
-    """Top companies by active-job count. Used for the popular-companies UI carousel."""
-
-    companies = await db.get_popular_companies(limit=limit)
-    return {"companies": companies}
-
-
 @router.post("/jobs/ingest")
 async def trigger_ingestion() -> dict:
     """Fire off an ad-hoc ingestion cycle."""

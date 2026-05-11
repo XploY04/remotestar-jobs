@@ -16,11 +16,14 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Fields that should never be overwritten by re-enrichment (system metadata).
+# Fields that should never be overwritten by re-enrichment.
+# Includes system metadata AND fields populated by separate pipelines
+# (ranking_score comes from compute_job_popularity, not from extraction).
 PROTECTED = {
     "_id", "source", "source_id", "id", "raw_data", "title_company_hash",
     "fetched_at", "is_archived", "is_deleted", "deleted_at", "archived_at",
     "archive_reason", "delete_reason", "pinecone_embedded_at",
+    "ranking_score", "ranking_updated_at",
 }
 
 
