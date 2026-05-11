@@ -63,9 +63,25 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
 
         try:
             started_at = datetime.now(timezone.utc)
-            processed = await pipeline.process_source(
-                source_name, raw_jobs, on_batch_ready=_save_batch
+
+            new_raw_jobs, pre_skipped, restored_in_dedup = await _pre_ai_dedup(
+                source_name, raw_jobs
             )
+            source_stats["skipped"] += pre_skipped
+            source_stats["restored"] += restored_in_dedup
+            if pre_skipped or restored_in_dedup:
+                logger.info(
+                    "[%s] Pre-AI dedup: skipped=%d restored=%d new=%d (of %d raw)",
+                    source_name, pre_skipped, restored_in_dedup,
+                    len(new_raw_jobs), len(raw_jobs),
+                )
+
+            if new_raw_jobs:
+                processed = await pipeline.process_source(
+                    source_name, new_raw_jobs, on_batch_ready=_save_batch
+                )
+            else:
+                processed = []
             completed_at = datetime.now(timezone.utc)
             try:
                 await db.save_query_metrics(source_name, query_plans.get(source_name), raw_jobs, processed, source_stats)
@@ -139,6 +155,62 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
         total_processed, total_new, total_skipped, total_restored,
     )
     return summary
+
+
+async def _pre_ai_dedup(
+    source_name: str, raw_jobs: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Filter raw_jobs against existing Mongo state BEFORE AI runs.
+
+    Active and archived duplicates are skipped entirely (no AI call, no save).
+    Soft-deleted duplicates are restored via a flag flip (no AI call).
+    Only genuinely new jobs are returned for downstream enrichment.
+
+    Returns (new_raw_jobs, skipped_count, restored_count).
+    """
+
+    if not raw_jobs:
+        return raw_jobs, 0, 0
+
+    candidate_ids: List[str] = []
+    for rj in raw_jobs:
+        derived = rj.get("id") or rj.get("source_id")
+        if not derived:
+            derived = EnrichmentPipeline._derive_source_id(source_name, rj)
+        candidate_ids.append(f"{source_name}_{derived}")
+
+    existing: Dict[str, Dict[str, Any]] = {}
+    cursor = db.jobs.find(
+        {"_id": {"$in": candidate_ids}},
+        {"_id": 1, "is_archived": 1, "is_deleted": 1},
+    )
+    async for doc in cursor:
+        existing[doc["_id"]] = doc
+
+    new_raw_jobs: List[Dict[str, Any]] = []
+    restore_ids: List[str] = []
+    skipped = 0
+    for rj, cid in zip(raw_jobs, candidate_ids):
+        match = existing.get(cid)
+        if match is None:
+            new_raw_jobs.append(rj)
+        elif match.get("is_deleted") is True:
+            restore_ids.append(cid)
+        else:
+            skipped += 1
+
+    restored = 0
+    if restore_ids:
+        result = await db.jobs.update_many(
+            {"_id": {"$in": restore_ids}},
+            {
+                "$set": {"is_deleted": False, "restored_at": datetime.now(timezone.utc)},
+                "$unset": {"deleted_at": "", "delete_reason": "", "pinecone_embedded_at": ""},
+            },
+        )
+        restored = result.modified_count
+
+    return new_raw_jobs, skipped, restored
 
 
 async def _generate_query_plans(fetchers: List) -> Dict[str, QueryPlan]:
