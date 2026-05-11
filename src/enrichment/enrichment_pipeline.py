@@ -38,7 +38,8 @@ class EnrichmentPipeline:
         self.ai_processor = AIProcessor() if self.use_ai else None
         self.skills_extractor = SkillsExtractor()
         self.quality_scorer = QualityScorer()
-        
+        self.metrics_by_source: Dict[str, Dict[str, Any]] = {}
+
         logger.info(f"Pipeline initialized (AI: {'enabled' if self.use_ai else 'disabled'})")
 
     # ------------------------------------------------------------------
@@ -67,12 +68,26 @@ class EnrichmentPipeline:
 
         logger.info(f"[{source_name}] Processing {len(raw_jobs)} raw jobs...")
 
+        if self.ai_processor:
+            self.ai_processor.reset_metrics(source_name)
+
         if self.use_ai and self.ai_processor and self.ai_processor.enabled:
             jobs = await self._process_with_ai(source_name, raw_jobs, batch_size, max_concurrent, on_batch_ready)
         else:
             jobs = self._process_with_fallback(source_name, raw_jobs)
             if on_batch_ready and jobs:
                 await on_batch_ready(jobs)
+
+        if self.ai_processor and self.ai_processor.enabled:
+            metrics = self.ai_processor.get_metrics(source_name)
+            self.metrics_by_source[source_name] = metrics
+            if metrics["fallback_rate"] > 0.05 and metrics["batch_ok"] + metrics["batch_fallback"] >= 5:
+                logger.warning(
+                    f"[{source_name}] HIGH fallback_rate={metrics['fallback_rate']:.2%} "
+                    f"(ok={metrics['batch_ok']}, fallback={metrics['batch_fallback']})"
+                )
+        else:
+            self.metrics_by_source[source_name] = {"batch_ok": 0, "batch_fallback": 0, "batch_failed": 0, "fallback_rate": 0.0}
 
         logger.info(f"[{source_name}] Processed: {len(jobs)}/{len(raw_jobs)} jobs")
         return jobs

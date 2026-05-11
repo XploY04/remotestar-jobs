@@ -62,13 +62,35 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
             )
 
         try:
+            started_at = datetime.now(timezone.utc)
             processed = await pipeline.process_source(
                 source_name, raw_jobs, on_batch_ready=_save_batch
             )
+            completed_at = datetime.now(timezone.utc)
             try:
                 await db.save_query_metrics(source_name, query_plans.get(source_name), raw_jobs, processed, source_stats)
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("[%s] Query metrics save failed: %s", source_name, exc)
+
+            ai_metrics = pipeline.metrics_by_source.get(source_name, {})
+            try:
+                await db.db["ingest_metrics"].insert_one({
+                    "source": source_name,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_seconds": (completed_at - started_at).total_seconds(),
+                    "raw_count": len(raw_jobs),
+                    "processed_count": len(processed),
+                    "new_count": source_stats["new"],
+                    "skipped_count": source_stats["skipped"],
+                    "restored_count": source_stats["restored"],
+                    "batch_ok": ai_metrics.get("batch_ok", 0),
+                    "batch_fallback": ai_metrics.get("batch_fallback", 0),
+                    "batch_failed": ai_metrics.get("batch_failed", 0),
+                    "fallback_rate": ai_metrics.get("fallback_rate", 0.0),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] Ingest metrics save failed: %s", source_name, exc)
 
             per_source[source_name] = {
                 "raw": len(raw_jobs),
@@ -76,15 +98,17 @@ async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, 
                 "new": source_stats["new"],
                 "skipped": source_stats["skipped"],
                 "restored": source_stats["restored"],
+                "fallback_rate": ai_metrics.get("fallback_rate", 0.0),
             }
             total_new += source_stats["new"]
             total_skipped += source_stats["skipped"]
             total_restored += source_stats["restored"]
             total_processed += len(processed)
 
-            logger.info("[%s] Done: raw=%d processed=%d new=%d skipped=%d restored=%d",
+            logger.info("[%s] Done: raw=%d processed=%d new=%d skipped=%d restored=%d fallback_rate=%.2f",
                         source_name, len(raw_jobs), len(processed),
-                        source_stats["new"], source_stats["skipped"], source_stats["restored"])
+                        source_stats["new"], source_stats["skipped"], source_stats["restored"],
+                        ai_metrics.get("fallback_rate", 0.0))
 
         except Exception as exc:
             logger.error("[%s] Failed: %s", source_name, exc, exc_info=True)

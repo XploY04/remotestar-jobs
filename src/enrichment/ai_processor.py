@@ -137,6 +137,12 @@ class AIProcessor:
         self._gemini_model = None
         self._openai_client = None
 
+        # Per-source counters consumed by the enrichment pipeline for metrics.
+        # Keyed by source because multiple sources process in parallel.
+        self.batch_ok: Dict[str, int] = {}
+        self.batch_fallback: Dict[str, int] = {}
+        self.batch_failed: Dict[str, int] = {}
+
         if settings.gemini_api_key:
             self._init_gemini()
         elif settings.openai_api_key:
@@ -145,6 +151,24 @@ class AIProcessor:
             logger.warning("No AI API key set (GEMINI_API_KEY or OPENAI_API_KEY) - AI processing disabled")
 
         self.enabled = self.provider is not None
+
+    def reset_metrics(self, source: str) -> None:
+        self.batch_ok[source] = 0
+        self.batch_fallback[source] = 0
+        self.batch_failed[source] = 0
+
+    def get_metrics(self, source: str) -> Dict[str, Any]:
+        ok = self.batch_ok.get(source, 0)
+        fb = self.batch_fallback.get(source, 0)
+        failed = self.batch_failed.get(source, 0)
+        total = ok + fb + failed
+        fallback_rate = round(fb / total, 4) if total else 0.0
+        return {
+            "batch_ok": ok,
+            "batch_fallback": fb,
+            "batch_failed": failed,
+            "fallback_rate": fallback_rate,
+        }
 
     def _init_gemini(self):
         import google.generativeai as genai
@@ -241,11 +265,14 @@ class AIProcessor:
 
             if isinstance(result, list) and len(result) == n:
                 logger.info(f"[{source}] Batch OK: {n} jobs in 1 API call")
+                self.batch_ok[source] = self.batch_ok.get(source, 0) + 1
                 return result
             elif isinstance(result, list):
                 logger.warning(f"[{source}] Batch returned {len(result)} for {n} jobs — padding/trimming")
+                self.batch_failed[source] = self.batch_failed.get(source, 0) + 1
                 return (result + [None] * n)[:n]
             elif isinstance(result, dict) and n == 1:
+                self.batch_ok[source] = self.batch_ok.get(source, 0) + 1
                 return [result]
             else:
                 logger.error(f"[{source}] Batch returned unexpected type: {type(result)}")
@@ -256,6 +283,7 @@ class AIProcessor:
             return self._fallback_to_single(source, chunk)
 
     def _fallback_to_single(self, source: str, chunk: List[Dict[str, Any]]) -> List[Optional[Dict[str, Any]]]:
+        self.batch_fallback[source] = self.batch_fallback.get(source, 0) + 1
         return [self.process_raw_job(source, raw_job) for raw_job in chunk]
 
     @staticmethod
