@@ -343,7 +343,6 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
 
         signals = {
             "skills_match": vector_score,
-            "vector_similarity": vector_score,
             "title_similarity": title_similarity_score(user_titles, job.get("title", "")),
             "seniority_fit": seniority_fit_score(user_level, job.get("seniority_level")),
             "location_match": location_match_score(user_location, job.get("country"), job.get("is_remote")),

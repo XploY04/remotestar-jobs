@@ -126,7 +126,6 @@ class Database:
             "company_website": job_data.get("company_website"),
             "description": job_data.get("description", ""),
             "short_description": job_data.get("short_description"),
-            "location": job_data.get("location"),
             "country": job_data.get("country"),
             "city": job_data.get("city"),
             "state": job_data.get("state"),

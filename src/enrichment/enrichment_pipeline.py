@@ -387,14 +387,7 @@ class EnrichmentPipeline:
             f"{title.lower().strip()}_{company.lower().strip()}".encode()
         ).hexdigest()[:16]
 
-        # Build legacy location blob for backward compatibility
-        job["location"] = {
-            "city": job.get("city"),
-            "country": job.get("country"),
-            "remote": job.get("is_remote", False),
-        }
-
-        # Ensure apply_url has a value — prefer raw data's URL over AI guess
+        # Ensure apply_url has a value, prefer raw data's URL over AI guess
         if not job.get("apply_url"):
             job["apply_url"] = (
                 raw_job.get("apply_url")
