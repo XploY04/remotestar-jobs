@@ -66,8 +66,16 @@ async def get_job(job_id: str) -> JobResponse:
 @router.get("/filters")
 async def get_filters() -> dict:
     """Return available filter options with job counts."""
-    
+
     return await db.get_filter_options()
+
+
+@router.get("/companies/popular")
+async def get_popular_companies(limit: int = Query(20, ge=1, le=100)) -> dict:
+    """Top companies by active-job count. Used for the popular-companies UI carousel."""
+
+    companies = await db.get_popular_companies(limit=limit)
+    return {"companies": companies}
 
 
 @router.post("/jobs/ingest")

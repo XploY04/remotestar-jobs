@@ -298,6 +298,28 @@ class Database:
         )
         return normalize_doc(doc)
 
+    async def get_popular_companies(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Top companies by active-job count. One job's logo per company (first non-null)."""
+
+        if self.db is None:
+            raise RuntimeError("Database not connected")
+
+        limit = max(1, min(limit, 100))
+        pipeline = [
+            {"$match": self.active_job_filter()},
+            {"$group": {
+                "_id": {"$ifNull": ["$company", "Unknown"]},
+                "count": {"$sum": 1},
+                "logo": {"$first": "$company_logo"},
+                "website": {"$first": "$company_website"},
+            }},
+            {"$match": {"_id": {"$ne": "Unknown"}}},
+            {"$sort": {"count": -1}},
+            {"$limit": limit},
+            {"$project": {"_id": 0, "company": "$_id", "count": 1, "logo": 1, "website": 1}},
+        ]
+        return [doc async for doc in self.jobs.aggregate(pipeline)]
+
     async def get_filter_options(self) -> Dict[str, Any]:
         """Get available filter options with job counts."""
 
