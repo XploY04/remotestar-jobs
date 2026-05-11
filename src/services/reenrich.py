@@ -61,25 +61,20 @@ async def reenrich_stale(db, limit: Optional[int] = None, batch_size: int = 100)
     errors = 0
     per_source: Dict[str, int] = {}
 
-    cursor = db.jobs.find(criteria, no_cursor_timeout=True).limit(limit or 0)
-    try:
-        while True:
-            batch_docs: List[Dict[str, Any]] = []
-            async for doc in cursor:
-                batch_docs.append(doc)
-                if len(batch_docs) >= batch_size:
-                    break
-            if not batch_docs:
-                break
+    # Fetch all matching ids up front (Atlas shared tier disallows no_cursor_timeout
+    # cursors and our pipeline can run >10min between fetches).
+    id_cursor = db.jobs.find(criteria, {"_id": 1}).limit(limit or 0)
+    target_ids = [doc["_id"] for doc in await id_cursor.to_list(length=None)]
 
-            await _reenrich_batch(db, pipeline, batch_docs, per_source)
-            reenriched += len(batch_docs)
-            logger.info("Re-enriched %d/%d", reenriched, total)
+    for i in range(0, len(target_ids), batch_size):
+        chunk_ids = target_ids[i:i + batch_size]
+        batch_docs = await db.jobs.find({"_id": {"$in": chunk_ids}}).to_list(length=None)
+        if not batch_docs:
+            continue
 
-            if limit and reenriched >= limit:
-                break
-    finally:
-        await cursor.close()
+        await _reenrich_batch(db, pipeline, batch_docs, per_source)
+        reenriched += len(batch_docs)
+        logger.info("Re-enriched %d/%d", reenriched, total)
 
     summary = {
         "scanned": total,
