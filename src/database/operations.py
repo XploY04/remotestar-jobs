@@ -213,9 +213,14 @@ class Database:
 
     @staticmethod
     def active_job_filter() -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
         return {
             "is_archived": {"$ne": True},
             "is_deleted": {"$ne": True},
+            "$or": [
+                {"application_deadline": None},
+                {"application_deadline": {"$gte": now}},
+            ],
         }
 
     async def count_jobs(
@@ -270,7 +275,7 @@ class Database:
             projection["score"] = {"$meta": "textScore"}
             sort = [("score", {"$meta": "textScore"}), ("posted_at", DESCENDING)]
         else:
-            sort = [("posted_at", DESCENDING)]
+            sort = [("ranking_score", DESCENDING), ("posted_at", DESCENDING)]
 
         cursor = self.jobs.find(query, projection).sort(sort).skip(offset).limit(limit)
         docs = await cursor.to_list(length=limit)

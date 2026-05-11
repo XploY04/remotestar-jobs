@@ -352,6 +352,15 @@ class EnrichmentPipeline:
         # Quality score (rule-based, fast)
         job["quality_score"] = self.quality_scorer.score(job)
 
+        # Seed ranking_score from quality_score until popularity aggregation runs
+        qs = job["quality_score"]
+        if qs >= 60:
+            job["ranking_score"] = min(50, qs)
+        elif qs >= 40:
+            job["ranking_score"] = 40
+        else:
+            job["ranking_score"] = 30
+
         # Title+company hash for dedup
         title = job.get("title", "")
         company = job.get("company", "")
