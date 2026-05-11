@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # AI Enrichment
     enable_ai_enrichment: bool = True
 
+    # ATS scraper: fetch per-job detail URLs when the list response omits
+    # the description (Workable, SmartRecruiters mostly).
+    enable_ats_detail_fetch: bool = True
+    ats_detail_min_description: int = 200
+    ats_detail_max_per_company: int = 30
+
     # Query planning
     enable_query_planner: bool = True
     query_planner_model: str = "gpt-4o-mini"

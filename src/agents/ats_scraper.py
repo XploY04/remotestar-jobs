@@ -20,6 +20,7 @@ import aiohttp
 from src.agents import BaseFetcher
 from src.services.query_planner import QueryPlan
 from src.services.company_discovery import CompanyDiscoveryService
+from src.utils.config import settings
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -30,6 +31,8 @@ MAX_COMPANIES_PER_PLATFORM = 50
 MAX_JOBS_PER_COMPANY = 50
 # Concurrent requests per platform
 CONCURRENCY = 5
+# Concurrent detail fetches per company
+DETAIL_CONCURRENCY = 5
 
 
 class ATSScraperFetcher(BaseFetcher):
@@ -119,6 +122,37 @@ class ATSScraperFetcher(BaseFetcher):
                 logger.error("[%s] Error scraping %s: %s", self.source_name, slug, exc)
                 return []
 
+    async def _enrich_descriptions(self, session, jobs, fetch_one):
+        """For jobs whose list response omitted the description, hit the
+        platform-specific detail endpoint to grab the full text.
+
+        Called per-company so we can cap total detail calls and bail out
+        cleanly if a single company has hundreds of postings.
+        """
+        if not settings.enable_ats_detail_fetch or not jobs:
+            return
+
+        min_len = settings.ats_detail_min_description
+        cap = settings.ats_detail_max_per_company
+        targets = [j for j in jobs if len(j.get("description") or "") < min_len][:cap]
+        if not targets:
+            return
+
+        sem = asyncio.Semaphore(DETAIL_CONCURRENCY)
+
+        async def fill(job):
+            async with sem:
+                try:
+                    full = await fetch_one(session, job)
+                    if full:
+                        job["description"] = self._strip_html(full)[:8000]
+                except Exception as exc:
+                    logger.debug("[%s] Detail fetch failed for %s: %s",
+                                 self.source_name, job.get("source_id"), exc)
+                await asyncio.sleep(0.1)
+
+        await asyncio.gather(*(fill(j) for j in targets))
+
     # ------------------------------------------------------------------
     # Greenhouse  (boards-api.greenhouse.io)
     # ------------------------------------------------------------------
@@ -160,7 +194,22 @@ class ATSScraperFetcher(BaseFetcher):
                 "apply_url": item.get("absolute_url", f"https://boards.greenhouse.io/{slug}/jobs/{item['id']}"),
                 "posted_at": self._parse_iso_date(item.get("updated_at")),
                 "raw_data": {"ats": "greenhouse", "slug": slug, "job_id": item["id"]},
+                "_gh_id": item["id"],
+                "_gh_slug": slug,
             })
+
+        async def fetch_gh_detail(s, job):
+            url = f"https://boards-api.greenhouse.io/v1/boards/{job['_gh_slug']}/jobs/{job['_gh_id']}"
+            async with s.get(url) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+                return d.get("content", "")
+
+        await self._enrich_descriptions(session, jobs, fetch_gh_detail)
+        for j in jobs:
+            j.pop("_gh_id", None)
+            j.pop("_gh_slug", None)
         return jobs
 
     # ------------------------------------------------------------------
@@ -219,7 +268,26 @@ class ATSScraperFetcher(BaseFetcher):
                 "apply_url": item.get("hostedUrl", f"https://jobs.lever.co/{slug}/{item['id']}"),
                 "posted_at": posted_at,
                 "raw_data": {"ats": "lever", "slug": slug, "job_id": item["id"]},
+                "_lv_id": item["id"],
+                "_lv_slug": slug,
             })
+
+        async def fetch_lv_detail(s, job):
+            url = f"https://api.lever.co/v0/postings/{job['_lv_slug']}/{job['_lv_id']}?mode=json"
+            async with s.get(url) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+                parts = []
+                for section in d.get("lists", []) or []:
+                    parts.append(section.get("text", ""))
+                    parts.append(section.get("content", ""))
+                return d.get("descriptionPlain") or d.get("description") or " ".join(parts)
+
+        await self._enrich_descriptions(session, jobs, fetch_lv_detail)
+        for j in jobs:
+            j.pop("_lv_id", None)
+            j.pop("_lv_slug", None)
         return jobs
 
     # ------------------------------------------------------------------
@@ -328,7 +396,22 @@ class ATSScraperFetcher(BaseFetcher):
                 "apply_url": item.get("url", f"https://apply.workable.com/{slug}/j/{shortcode}/"),
                 "posted_at": self._parse_iso_date(item.get("published_on")),
                 "raw_data": {"ats": "workable", "slug": slug, "shortcode": shortcode},
+                "_wk_shortcode": shortcode,
+                "_wk_slug": slug,
             })
+
+        async def fetch_wk_detail(s, job):
+            url = f"https://apply.workable.com/api/v3/accounts/{job['_wk_slug']}/jobs/{job['_wk_shortcode']}"
+            async with s.get(url) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+                return d.get("description") or d.get("full_description") or ""
+
+        await self._enrich_descriptions(session, jobs, fetch_wk_detail)
+        for j in jobs:
+            j.pop("_wk_shortcode", None)
+            j.pop("_wk_slug", None)
         return jobs
 
     # ------------------------------------------------------------------
@@ -379,7 +462,28 @@ class ATSScraperFetcher(BaseFetcher):
                 "apply_url": f"https://jobs.smartrecruiters.com/{slug}/{item.get('id', '')}",
                 "posted_at": self._parse_iso_date(item.get("releasedDate")),
                 "raw_data": {"ats": "smartrecruiters", "slug": slug, "job_id": item.get("id")},
+                "_sr_id": item.get("id"),
+                "_sr_slug": slug,
             })
+
+        async def fetch_sr_detail(s, job):
+            url = f"https://api.smartrecruiters.com/v1/companies/{job['_sr_slug']}/postings/{job['_sr_id']}"
+            async with s.get(url) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+                sections = (d.get("jobAd") or {}).get("sections") or {}
+                parts = []
+                for key in ("jobDescription", "qualifications", "responsibilities", "additionalInformation"):
+                    text = (sections.get(key) or {}).get("text") or ""
+                    if text:
+                        parts.append(text)
+                return "\n\n".join(parts)
+
+        await self._enrich_descriptions(session, jobs, fetch_sr_detail)
+        for j in jobs:
+            j.pop("_sr_id", None)
+            j.pop("_sr_slug", None)
         return jobs
 
     # ------------------------------------------------------------------
