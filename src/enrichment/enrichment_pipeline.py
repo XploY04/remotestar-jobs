@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Any, List, Optional
 
-from src.enrichment.ai_processor import AIProcessor
+from src.enrichment.ai_processor import AIProcessor, PROMPT_VERSION
 from src.enrichment.skills_extractor import SkillsExtractor
 from src.enrichment.quality_scorer import QualityScorer
 from src.utils.logger import setup_logger
@@ -351,6 +351,10 @@ class EnrichmentPipeline:
 
         # Quality score (rule-based, fast)
         job["quality_score"] = self.quality_scorer.score(job)
+
+        # Track which prompt version produced this enrichment (only set on AI path)
+        if self.use_ai and self.ai_processor and self.ai_processor.enabled:
+            job["prompt_version"] = PROMPT_VERSION
 
         # Seed ranking_score from quality_score until popularity aggregation runs
         qs = job["quality_score"]

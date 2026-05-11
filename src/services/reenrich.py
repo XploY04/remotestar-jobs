@@ -1,0 +1,127 @@
+"""Re-enrich jobs with a stale or missing prompt_version.
+
+Reuses the existing EnrichmentPipeline so newly-enriched fields match what
+fresh ingestion would produce. Updates jobs in place (does not go through
+save_jobs, which would treat them as duplicates and skip).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from src.enrichment.ai_processor import PROMPT_VERSION
+from src.enrichment.enrichment_pipeline import EnrichmentPipeline
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
+# Fields that should never be overwritten by re-enrichment (system metadata).
+PROTECTED = {
+    "_id", "source", "source_id", "id", "raw_data", "title_company_hash",
+    "fetched_at", "is_archived", "is_deleted", "deleted_at", "archived_at",
+    "archive_reason", "delete_reason", "pinecone_embedded_at",
+}
+
+
+async def reenrich_stale(db, limit: Optional[int] = None, batch_size: int = 100) -> Dict[str, Any]:
+    """Find jobs where prompt_version is missing or older than current, then re-run them.
+
+    `limit` caps the number of jobs processed in this run (None = all).
+    Returns {scanned, reenriched, errors, per_source}.
+    """
+
+    if db.db is None:
+        raise RuntimeError("Database not connected")
+
+    criteria = {
+        "is_archived": {"$ne": True},
+        "is_deleted": {"$ne": True},
+        "raw_data": {"$exists": True, "$ne": None},
+        "$or": [
+            {"prompt_version": {"$exists": False}},
+            {"prompt_version": {"$ne": PROMPT_VERSION}},
+        ],
+    }
+
+    total = await db.jobs.count_documents(criteria)
+    if total == 0:
+        logger.info("No stale jobs to re-enrich")
+        return {"scanned": 0, "reenriched": 0, "errors": 0, "per_source": {}}
+
+    if limit:
+        total = min(total, limit)
+    logger.info("Re-enriching %d jobs to prompt_version=%s (batch=%d)", total, PROMPT_VERSION, batch_size)
+
+    pipeline = EnrichmentPipeline(use_ai=True)
+    if not (pipeline.ai_processor and pipeline.ai_processor.enabled):
+        raise RuntimeError("AI processor not enabled — cannot re-enrich")
+
+    reenriched = 0
+    errors = 0
+    per_source: Dict[str, int] = {}
+
+    cursor = db.jobs.find(criteria, no_cursor_timeout=True).limit(limit or 0)
+    try:
+        while True:
+            batch_docs: List[Dict[str, Any]] = []
+            async for doc in cursor:
+                batch_docs.append(doc)
+                if len(batch_docs) >= batch_size:
+                    break
+            if not batch_docs:
+                break
+
+            await _reenrich_batch(db, pipeline, batch_docs, per_source)
+            reenriched += len(batch_docs)
+            logger.info("Re-enriched %d/%d", reenriched, total)
+
+            if limit and reenriched >= limit:
+                break
+    finally:
+        await cursor.close()
+
+    summary = {
+        "scanned": total,
+        "reenriched": reenriched,
+        "errors": errors,
+        "per_source": per_source,
+    }
+    logger.info("Re-enrich complete: %s", summary)
+    return summary
+
+
+async def _reenrich_batch(db, pipeline: EnrichmentPipeline,
+                          docs: List[Dict[str, Any]], per_source: Dict[str, int]) -> None:
+    """Group docs by source, re-run through AI, update in place."""
+
+    by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for doc in docs:
+        src = doc.get("source") or "unknown"
+        by_source.setdefault(src, []).append(doc)
+
+    now = datetime.now(timezone.utc)
+
+    for source, source_docs in by_source.items():
+        raw_jobs = [d.get("raw_data") for d in source_docs if d.get("raw_data")]
+        if not raw_jobs:
+            continue
+
+        results = await pipeline.process_source(
+            source_name=source,
+            raw_jobs=raw_jobs,
+            batch_size=5,
+            max_concurrent=10,
+            on_batch_ready=None,
+        )
+
+        for original, finalized in zip(source_docs, results):
+            if not finalized:
+                continue
+            update_doc = {k: v for k, v in finalized.items() if k not in PROTECTED}
+            update_doc["reenriched_at"] = now
+            await db.jobs.update_one(
+                {"_id": original["_id"]},
+                {"$set": update_doc},
+            )
+            per_source[source] = per_source.get(source, 0) + 1

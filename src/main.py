@@ -45,6 +45,14 @@ async def _run_cleanup() -> dict:
     return result
 
 
+async def _run_reenrich_stale(limit: int | None) -> dict:
+    from src.services.reenrich import reenrich_stale
+    await db.connect()
+    result = await reenrich_stale(db, limit=limit)
+    await db.disconnect()
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backend & DevOps job aggregator")
     parser.add_argument(
@@ -78,6 +86,17 @@ def main() -> None:
         action="store_true",
         help="Remove expired jobs then exit",
     )
+    parser.add_argument(
+        "--reenrich-stale",
+        action="store_true",
+        help="Re-run AI enrichment on jobs with outdated prompt_version then exit",
+    )
+    parser.add_argument(
+        "--reenrich-limit",
+        type=int,
+        default=None,
+        help="Cap the number of jobs re-enriched (default: all stale)",
+    )
 
     args = parser.parse_args()
 
@@ -99,6 +118,11 @@ def main() -> None:
     if args.cleanup:
         result = asyncio.run(_run_cleanup())
         print(json.dumps(result, indent=2))  # noqa: T201
+        return
+
+    if args.reenrich_stale:
+        result = asyncio.run(_run_reenrich_stale(args.reenrich_limit))
+        print(json.dumps(result, indent=2, default=str))  # noqa: T201
         return
 
     if args.ingest_once:
