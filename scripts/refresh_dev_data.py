@@ -35,10 +35,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.uri_parser import parse_uri
 
 from src.database.models import ensure_indexes
+
+load_dotenv()
 
 
 JOBS_WINDOW_DAYS = 14
