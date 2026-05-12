@@ -364,6 +364,15 @@ class EnrichmentPipeline:
         if not job.get("company"):
             job["company"] = "Unknown"
 
+        # Coerce salary fields to strings to match the Go service's job model
+        # (it deserializes them as *string, not *float). save_jobs._build_job_doc
+        # already does this for the ingest path; doing it here covers the
+        # reenrich path too, which writes the dict directly via update_one.
+        for key in ("salary_min", "salary_max"):
+            value = job.get(key)
+            if value is not None and not isinstance(value, str):
+                job[key] = str(value)
+
         # Quality score (rule-based, fast)
         job["quality_score"] = self.quality_scorer.score(job)
 
