@@ -7,6 +7,9 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str
+    # Optional second target for the prod->dev refresh script. Set in
+    # /root/jobs.ai-prod/.env on the rs server; unused elsewhere.
+    database_url_dev: Optional[str] = None
 
     # API Keys
     rapidapi_key: Optional[str] = None
