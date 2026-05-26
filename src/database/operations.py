@@ -156,6 +156,7 @@ class Database:
             "tags": job_data.get("tags"),
             "quality_score": job_data.get("quality_score"),
             "raw_data": job_data.get("raw_data"),
+            "prompt_version": job_data.get("prompt_version"),
             "title_company_hash": title_company_hash,
         }
 

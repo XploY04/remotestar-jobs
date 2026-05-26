@@ -12,6 +12,8 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+RAW_TEXT_CHAR_LIMIT = 1_000_000
+
 
 class HackerNewsFetcher(BaseFetcher):
     """
@@ -167,13 +169,14 @@ class HackerNewsFetcher(BaseFetcher):
         # Return raw data with ALL extracted info + original comment data
         return {
             '_source': self.source_name,
-            '_raw_html': text,  # Original HTML content
-            '_raw_text': clean_text,  # Cleaned text
+            '_raw_html': self._cap_text(text),  # Original HTML content
+            '_raw_text': self._cap_text(clean_text),  # Cleaned text
+            '_raw_comment': self._cap_raw_value(comment),
             '_first_line': first_line,
             'id': str(comment.get('id', 0)),
             'title': title[:200] if title else first_line[:200],
             'company': company[:100] if company else "See Description",
-            'description': description[:8000],
+            'description': self._cap_text(description),
             'location_raw': location,
             'remote': remote,
             'apply_url': apply_url or f"https://news.ycombinator.com/item?id={comment.get('id')}",
@@ -245,12 +248,26 @@ class HackerNewsFetcher(BaseFetcher):
         return bool(re.search(r"\bREMOTE\b", text, re.IGNORECASE))
 
     def _clean_description(self, text: str) -> str:
-        """Clean and truncate description"""
+        """Clean description text"""
         # Remove URLs and emails for cleaner description
         text = re.sub(r"https?://[^\s]+", "", text)
         text = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", "", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text
+
+    @staticmethod
+    def _cap_text(value: str) -> str:
+        return value[:RAW_TEXT_CHAR_LIMIT]
+
+    @classmethod
+    def _cap_raw_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return cls._cap_text(value)
+        if isinstance(value, dict):
+            return {k: cls._cap_raw_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [cls._cap_raw_value(v) for v in value]
+        return value
 
     def _extract_apply_url(self, text: str) -> Optional[str]:
         """Extract application URL"""

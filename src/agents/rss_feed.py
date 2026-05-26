@@ -13,6 +13,8 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+RAW_TEXT_CHAR_LIMIT = 1_000_000
+
 
 class RSSFeedFetcher(BaseFetcher):
     """
@@ -149,12 +151,13 @@ class RSSFeedFetcher(BaseFetcher):
                 "_source": self.source_name,
                 "_feed_url": feed_url,
                 "_entry_id": source_id,
-                "_description_html": description_html[:10000],
+                "_description_html": self._cap_text(description_html),
+                "_raw_entry": self._cap_raw_value(dict(entry)),
                 "_tags": tags,
                 "source_id": source_id,
                 "title": title[:500],
                 "company": company[:200],
-                "description": description_clean[:10000],
+                "description": self._cap_text(description_clean),
                 "location_raw": location_raw,
                 "remote": "remote" in location_raw.lower() if location_raw else False,
                 "apply_url": apply_url or "",
@@ -174,6 +177,20 @@ class RSSFeedFetcher(BaseFetcher):
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
+
+    @staticmethod
+    def _cap_text(value: str) -> str:
+        return value[:RAW_TEXT_CHAR_LIMIT]
+
+    @classmethod
+    def _cap_raw_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return cls._cap_text(value)
+        if isinstance(value, dict):
+            return {k: cls._cap_raw_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [cls._cap_raw_value(v) for v in value]
+        return value
 
     def _parse_date(self, entry: Any) -> datetime:
         """Parse published date from entry"""

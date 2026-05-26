@@ -190,6 +190,20 @@ def test_active_job_filter_is_default_query_base():
     }
 
 
+def test_build_job_doc_persists_prompt_version():
+    db = Database()
+    job_data = _job_data("prompt-version")
+    job_data["prompt_version"] = "v4"
+
+    doc = db._build_job_doc(
+        "test_prompt-version",
+        db._hash_title_company(job_data["title"], job_data["company"]),
+        job_data,
+    )
+
+    assert doc["prompt_version"] == "v4"
+
+
 def _job_data(source_id: str):
     return {
         "source": "test",

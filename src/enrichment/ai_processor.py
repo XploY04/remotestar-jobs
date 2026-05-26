@@ -28,7 +28,8 @@ BATCH_SIZE = 5
 # v1: original 27-field schema, json_object mode.
 # v2: slimmed schema (~20 fields), OpenAI structured outputs.
 # v3: country tightened to ISO 3166 alpha-2 lowercase via Literal enum.
-PROMPT_VERSION = "v3"
+# v4: AI now produces a long-form description, not only a short summary.
+PROMPT_VERSION = "v4"
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,7 @@ class JobExtraction(BaseModel):
     company: str
     company_logo: Optional[str]
     company_website: Optional[str]
+    description: str
     short_description: str
     country: Optional[CountryCode]
     city: Optional[str]
@@ -105,6 +107,7 @@ OUTPUT SCHEMA — every job object must match this structure:
   "company": "string — company/employer name",
   "company_logo": "string or null — URL to company logo image",
   "company_website": "string or null — company website URL",
+  "description": "string — detailed long-form job description synthesized from the raw listing",
   "short_description": "string — 2-3 sentence summary of the role",
   "country": "ISO 3166 alpha-2 lowercase code (e.g. us, gb, in, de), or null if unclear",
   "city": "city name or null",
@@ -130,19 +133,20 @@ EXTRACTION RULES:
 3. For "company": Extract company/employer name. Use "Unknown" only if truly absent.
 4. For "company_logo": Look for logo/image URLs (e.g. employer_logo, company_logo, logo fields).
 5. For "company_website": Look for employer/company website URLs.
-6. For "short_description": Generate a concise 2-3 sentence summary from the full description.
-7. For location fields: Parse location strings intelligently. "San Francisco, CA" → city="San Francisco", country="US". "Remote" → is_remote=true.
-8. For "is_remote": true if remote work mentioned, OR source is "remoteok", OR job_is_remote=true.
-9. For "work_arrangement": Determine from context. Default "onsite" if unclear, "remote" for remoteok source.
-10. For "category": Classify based on ACTUAL role responsibilities. Sales/marketing/HR = "general". Only tech categories for actual tech roles.
-11. For "salary_min"/"salary_max": NUMERIC values only (assume annual). If single salary mentioned, use for both.
-12. For "skills": ALL technical skills, languages, frameworks, tools mentioned. Max 20.
-13. For "required_experience_years": From "3+ years", "5-7 years" etc. Use the MINIMUM.
-14. For "application_deadline": ONLY explicit deadlines. null if not mentioned.
-15. For "benefits": Health insurance, 401k, PTO, equity, etc. Max 10.
-16. For "visa_sponsorship": "yes" ONLY if explicitly mentioned. "unknown" if not discussed.
-17. Max 20 skills, 8 responsibilities, 10 benefits.
-18. For SINGLE job requests: return a JSON object. For BATCH requests: return {"jobs": [...]} with the array in the same order as the input."""
+6. For "description": Generate a long, candidate-facing description from the full raw listing. Preserve the real role details. Include responsibilities, requirements, tools, benefits, compensation, location, and application context when present. Do not invent facts, do not add generic filler, and do not shorten this into a summary.
+7. For "short_description": Generate a concise 2-3 sentence summary from the long description.
+8. For location fields: Parse location strings intelligently. "San Francisco, CA" → city="San Francisco", country="US". "Remote" → is_remote=true.
+9. For "is_remote": true if remote work mentioned, OR source is "remoteok", OR job_is_remote=true.
+10. For "work_arrangement": Determine from context. Default "onsite" if unclear, "remote" for remoteok source.
+11. For "category": Classify based on ACTUAL role responsibilities. Sales/marketing/HR = "general". Only tech categories for actual tech roles.
+12. For "salary_min"/"salary_max": NUMERIC values only (assume annual). If single salary mentioned, use for both.
+13. For "skills": ALL technical skills, languages, frameworks, tools mentioned. Max 20.
+14. For "required_experience_years": From "3+ years", "5-7 years" etc. Use the MINIMUM.
+15. For "application_deadline": ONLY explicit deadlines. null if not mentioned.
+16. For "benefits": Health insurance, 401k, PTO, equity, etc. Max 10.
+17. For "visa_sponsorship": "yes" ONLY if explicitly mentioned. "unknown" if not discussed.
+18. Max 20 skills, 8 responsibilities, 10 benefits.
+19. For SINGLE job requests: return a JSON object. For BATCH requests: return {"jobs": [...]} with the array in the same order as the input."""
 
 
 class AIProcessor:

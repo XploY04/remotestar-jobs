@@ -335,6 +335,12 @@ class EnrichmentPipeline:
         # Store full raw data as backup (serialize datetimes for JSON column)
         job["raw_data"] = json.loads(json.dumps(raw_job, default=str))
 
+        # Older extraction schemas did not return the full description. Keep a
+        # source-derived description as a safety net so downstream detail views
+        # are not left with only the short summary.
+        if not job.get("description"):
+            job["description"] = self._raw_description(raw_job)
+
         # Carry over source_url from raw data if AI didn't extract it
         if not job.get("source_url"):
             job["source_url"] = (
@@ -483,6 +489,14 @@ class EnrichmentPipeline:
     @staticmethod
     def _detect_remote_from_text(text: str) -> bool:
         return bool(re.search(r'\b(remote|work from home|wfh|telecommut|anywhere)\b', text.lower()))
+
+    @staticmethod
+    def _raw_description(raw: Dict[str, Any]) -> str:
+        for key in ("description", "job_description", "_description_html", "_raw_text", "summary"):
+            value = raw.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
 
     @staticmethod
     def _extract_years(exp_obj) -> Optional[int]:

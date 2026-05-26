@@ -31,6 +31,7 @@ MAX_JOBS_PER_COMPANY = 50
 CONCURRENCY = 5
 # Concurrent detail fetches per company
 DETAIL_CONCURRENCY = 5
+RAW_TEXT_CHAR_LIMIT = 1_000_000
 
 
 class ATSScraperFetcher(BaseFetcher):
@@ -141,7 +142,7 @@ class ATSScraperFetcher(BaseFetcher):
                 try:
                     full = await fetch_one(session, job)
                     if full:
-                        job["description"] = self._strip_html(full)[:8000]
+                        job["description"] = self._cap_text(self._strip_html(full))
                 except Exception as exc:
                     logger.debug("[%s] Detail fetch failed for %s: %s",
                                  self.source_name, job.get("source_id"), exc)
@@ -177,7 +178,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "source_id": f"gh_{slug}_{item['id']}",
                 "title": item.get("title", ""),
                 "company": company_name,
-                "description": self._strip_html(description)[:8000],
+                "description": self._cap_text(self._strip_html(description)),
                 "location": {
                     "city": location_name if location_name else None,
                     "country": None,
@@ -189,7 +190,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "salary_currency": None,
                 "apply_url": item.get("absolute_url", f"https://boards.greenhouse.io/{slug}/jobs/{item['id']}"),
                 "posted_at": self._parse_iso_date(item.get("updated_at")),
-                "raw_data": {"ats": "greenhouse", "slug": slug, "job_id": item["id"]},
+                "raw_data": {"ats": "greenhouse", "slug": slug, "job_id": item["id"], "item": self._cap_raw_value(item)},
                 "_gh_id": item["id"],
                 "_gh_slug": slug,
             })
@@ -200,6 +201,7 @@ class ATSScraperFetcher(BaseFetcher):
                 if r.status != 200:
                     return None
                 d = await r.json()
+                job["raw_data"]["detail"] = self._cap_raw_value(d)
                 return d.get("content", "")
 
         await self._enrich_descriptions(session, jobs, fetch_gh_detail)
@@ -251,7 +253,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "source_id": f"lv_{slug}_{item['id']}",
                 "title": item.get("text", ""),
                 "company": company_name,
-                "description": self._strip_html(description)[:8000],
+                "description": self._cap_text(self._strip_html(description)),
                 "location": {
                     "city": location if location else None,
                     "country": None,
@@ -263,7 +265,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "salary_currency": None,
                 "apply_url": item.get("hostedUrl", f"https://jobs.lever.co/{slug}/{item['id']}"),
                 "posted_at": posted_at,
-                "raw_data": {"ats": "lever", "slug": slug, "job_id": item["id"]},
+                "raw_data": {"ats": "lever", "slug": slug, "job_id": item["id"], "item": self._cap_raw_value(item)},
                 "_lv_id": item["id"],
                 "_lv_slug": slug,
             })
@@ -274,6 +276,7 @@ class ATSScraperFetcher(BaseFetcher):
                 if r.status != 200:
                     return None
                 d = await r.json()
+                job["raw_data"]["detail"] = self._cap_raw_value(d)
                 parts = []
                 for section in d.get("lists", []) or []:
                     parts.append(section.get("text", ""))
@@ -325,7 +328,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "source_id": f"ab_{slug}_{item['id']}",
                 "title": item.get("title", ""),
                 "company": company_name,
-                "description": self._strip_html(description)[:8000],
+                "description": self._cap_text(self._strip_html(description)),
                 "location": {
                     "city": location if location else None,
                     "country": None,
@@ -337,7 +340,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "salary_currency": None,
                 "apply_url": item.get("jobUrl", f"https://jobs.ashbyhq.com/{slug}/{item['id']}"),
                 "posted_at": self._parse_iso_date(item.get("publishedAt")),
-                "raw_data": {"ats": "ashby", "slug": slug, "job_id": item["id"]},
+                "raw_data": {"ats": "ashby", "slug": slug, "job_id": item["id"], "item": self._cap_raw_value(item)},
             })
         return jobs
 
@@ -379,7 +382,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "source_id": f"wk_{slug}_{shortcode}",
                 "title": item.get("title", ""),
                 "company": company_name,
-                "description": item.get("description", "")[:8000],
+                "description": self._cap_text(item.get("description", "")),
                 "location": {
                     "city": city if city else None,
                     "country": country if country else None,
@@ -391,7 +394,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "salary_currency": None,
                 "apply_url": item.get("url", f"https://apply.workable.com/{slug}/j/{shortcode}/"),
                 "posted_at": self._parse_iso_date(item.get("published_on")),
-                "raw_data": {"ats": "workable", "slug": slug, "shortcode": shortcode},
+                "raw_data": {"ats": "workable", "slug": slug, "shortcode": shortcode, "item": self._cap_raw_value(item)},
                 "_wk_shortcode": shortcode,
                 "_wk_slug": slug,
             })
@@ -402,6 +405,7 @@ class ATSScraperFetcher(BaseFetcher):
                 if r.status != 200:
                     return None
                 d = await r.json()
+                job["raw_data"]["detail"] = self._cap_raw_value(d)
                 return d.get("description") or d.get("full_description") or ""
 
         await self._enrich_descriptions(session, jobs, fetch_wk_detail)
@@ -445,7 +449,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "source_id": f"sr_{slug}_{item.get('id', '')}",
                 "title": item.get("name", ""),
                 "company": company_name or item.get("company", {}).get("name", slug),
-                "description": item.get("jobAd", {}).get("sections", {}).get("jobDescription", {}).get("text", "")[:8000] if isinstance(item.get("jobAd"), dict) else "",
+                "description": self._cap_text(item.get("jobAd", {}).get("sections", {}).get("jobDescription", {}).get("text", "") if isinstance(item.get("jobAd"), dict) else ""),
                 "location": {
                     "city": city if city else None,
                     "country": country if country else None,
@@ -457,7 +461,7 @@ class ATSScraperFetcher(BaseFetcher):
                 "salary_currency": None,
                 "apply_url": f"https://jobs.smartrecruiters.com/{slug}/{item.get('id', '')}",
                 "posted_at": self._parse_iso_date(item.get("releasedDate")),
-                "raw_data": {"ats": "smartrecruiters", "slug": slug, "job_id": item.get("id")},
+                "raw_data": {"ats": "smartrecruiters", "slug": slug, "job_id": item.get("id"), "item": self._cap_raw_value(item)},
                 "_sr_id": item.get("id"),
                 "_sr_slug": slug,
             })
@@ -468,6 +472,7 @@ class ATSScraperFetcher(BaseFetcher):
                 if r.status != 200:
                     return None
                 d = await r.json()
+                job["raw_data"]["detail"] = self._cap_raw_value(d)
                 sections = (d.get("jobAd") or {}).get("sections") or {}
                 parts = []
                 for key in ("jobDescription", "qualifications", "responsibilities", "additionalInformation"):
@@ -494,6 +499,20 @@ class ATSScraperFetcher(BaseFetcher):
         clean = re.sub(r"<[^>]+>", " ", html)
         clean = re.sub(r"\s+", " ", clean)
         return clean.strip()
+
+    @staticmethod
+    def _cap_text(value: str) -> str:
+        return value[:RAW_TEXT_CHAR_LIMIT]
+
+    @classmethod
+    def _cap_raw_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return cls._cap_text(value)
+        if isinstance(value, dict):
+            return {k: cls._cap_raw_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [cls._cap_raw_value(v) for v in value]
+        return value
 
     @staticmethod
     def _parse_iso_date(value: Optional[str]) -> datetime:
