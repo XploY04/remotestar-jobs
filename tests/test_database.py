@@ -184,10 +184,7 @@ async def test_cleanup_expired_jobs_soft_deletes_without_archiving():
 
 def test_active_job_filter_is_default_query_base():
     db = Database()
-    assert db._build_filter() == {
-        "is_archived": {"$ne": True},
-        "is_deleted": {"$ne": True},
-    }
+    assert db._build_filter() == db.active_job_filter()
 
 
 def test_build_job_doc_persists_prompt_version():
