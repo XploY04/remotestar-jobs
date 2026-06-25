@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 from pinecone import Pinecone
+from pydantic import BaseModel
 
 from src.database.operations import db
 from src.services.match_scorer import (
@@ -377,7 +378,7 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     # Stage 3: AI refinement on top 20
     _progress("ai_refining", f"AI analyzing top {min(len(top_matches), TOP_N_AI)} matches...", 60)
     if run_ai and top_matches:
-        ai_results = await _ai_refine(user, job_lookup, top_matches[:TOP_N_AI])
+        ai_results = await _ai_refine(user, resume_doc, job_lookup, top_matches[:TOP_N_AI])
         for match in top_matches:
             _merge_ai_result(match, ai_results.get(match["job_id"]))
 
@@ -438,18 +439,72 @@ def _is_intern_position(position: str) -> bool:
     return any(token in tokens for token in ("intern", "internship", "trainee", "apprentice"))
 
 
-async def _ai_refine(
-    user: dict, job_lookup: Dict[str, dict], top_matches: List[dict]
-) -> Dict[str, dict]:
-    """Stage 3: Send top matches to OpenAI for scoring + reasoning."""
+class _AIMatchScore(BaseModel):
+    job_id: str
+    ai_score: int
+    reason: str
+    skills_gap: List[str]
+    strengths: List[str]
 
-    user_summary = (
-        f"Role: {user.get('role_focus', 'Unknown')}. "
-        f"Skills: {', '.join((user.get('skills') or [])[:15])}. "
-        f"Experience: {user.get('years_of_experience', '?')} years. "
-        f"Seniority: {user.get('seniority_level', 'Unknown')}. "
-        f"Location: {user.get('location', 'Unknown')}."
-    )
+
+class _AIMatchBatch(BaseModel):
+    matches: List[_AIMatchScore]
+
+
+def _build_candidate_summary(user: dict, resume_doc: Optional[dict]) -> str:
+    """Build the candidate description sent to AI refinement.
+
+    Reads the parsed resume (`editable_profile`) as the source of truth — skills,
+    titles, technologies, summary — with the (usually empty) `users` doc fields
+    as fallback. The previous summary read only the `users` doc, which is blank
+    for ~all users, so the model scored every candidate 0.
+    """
+    profile = (resume_doc or {}).get("editable_profile") or {}
+
+    skills = [s.get("name") for s in (profile.get("skills") or [])
+              if isinstance(s, dict) and s.get("name")]
+    if not skills:
+        skills = list(user.get("skills") or [])
+
+    techs: List[str] = []
+    for exp in (profile.get("experiences") or []):
+        for tech in (exp.get("technologies") or []):
+            if tech and tech not in techs:
+                techs.append(tech)
+
+    titles = _collect_user_titles(user, resume_doc)
+    role = titles[0] if titles else (user.get("role_focus") or "Unknown")
+    seniority = user.get("seniority_level") or ""
+    years = user.get("years_of_experience") or ""
+    location = user.get("location") or (profile.get("personal") or {}).get("location") or ""
+    summary = (profile.get("summary") or "").strip()
+
+    parts = [f"Role: {role}."]
+    if skills:
+        parts.append(f"Skills: {', '.join(skills[:20])}.")
+    if techs:
+        parts.append(f"Technologies: {', '.join(techs[:15])}.")
+    if seniority:
+        parts.append(f"Seniority: {seniority}.")
+    if years:
+        parts.append(f"Experience: {years} years.")
+    if location:
+        parts.append(f"Location: {location}.")
+    if summary:
+        parts.append(f"Summary: {summary[:600]}")
+    return " ".join(parts)
+
+
+async def _ai_refine(
+    user: dict, resume_doc: Optional[dict], job_lookup: Dict[str, dict], top_matches: List[dict]
+) -> Dict[str, dict]:
+    """Stage 3: Send top matches to OpenAI for scoring + reasoning.
+
+    Uses structured outputs (a strict schema) so the response shape is
+    guaranteed, and logs on failure instead of silently returning nothing.
+    """
+
+    user_summary = _build_candidate_summary(user, resume_doc)
 
     jobs_block = []
     for match in top_matches:
@@ -473,35 +528,29 @@ async def _ai_refine(
     prompt = (
         f"Candidate profile: {user_summary}\n\n"
         f"Jobs to evaluate:\n{json.dumps(jobs_block, default=str)}\n\n"
-        "For each job, return a JSON array with objects containing:\n"
-        '- "job_id": the job_id\n'
-        '- "ai_score": 0-100 match score\n'
-        '- "reason": one sentence explaining the match\n'
-        '- "skills_gap": list of skills the candidate is missing\n'
-        '- "strengths": list of candidate skills that are relevant\n'
-        "Return ONLY the JSON array."
+        "For each job return job_id, ai_score (0-100 overall fit), a one-sentence "
+        "reason, skills_gap (skills the candidate lacks), and strengths (relevant "
+        "candidate skills)."
     )
 
     try:
-        client = _get_openai()
-        response = client.chat.completions.create(
+        response = _get_openai().beta.chat.completions.parse(
             model="gpt-4o-mini",
             temperature=0,
-            response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "You are a job matching assistant. Return only valid JSON."},
+                {"role": "system", "content": "You are a job matching assistant."},
                 {"role": "user", "content": prompt},
             ],
+            response_format=_AIMatchBatch,
         )
-        parsed = json.loads(response.choices[0].message.content)
-        if isinstance(parsed, dict) and "matches" in parsed:
-            return {item["job_id"]: item for item in parsed["matches"] if "job_id" in item}
-        if isinstance(parsed, list):
-            return {item["job_id"]: item for item in parsed if "job_id" in item}
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            logger.warning("AI refinement returned no parsed result for user %s", user.get("_id"))
+            return {}
+        return {m.job_id: m.model_dump() for m in parsed.matches}
     except Exception as e:
-        logger.error("AI refinement failed: %s", e)
-
-    return {}
+        logger.warning("AI refinement failed for user %s: %s", user.get("_id"), e)
+        return {}
 
 
 # ------------------------------------------------------------------

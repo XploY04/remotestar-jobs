@@ -1,5 +1,31 @@
-from src.services.matcher import _collect_user_titles, _merge_ai_result
+from src.services.matcher import (
+    _build_candidate_summary,
+    _collect_user_titles,
+    _merge_ai_result,
+)
 from src.services.match_scorer import seniority_fit_score
+
+
+def test_candidate_summary_uses_resume_when_users_doc_is_empty():
+    # The real-world case: users doc is blank, all data lives in the resume.
+    user = {"role_focus": "Senior Software Engineer", "skills": [],
+            "seniority_level": "", "years_of_experience": 0, "location": ""}
+    resume_doc = {"editable_profile": {
+        "skills": [{"name": "Go"}, {"name": "Python"}, {"name": "Kubernetes"}],
+        "experiences": [{"position": "Senior Software Engineer", "technologies": ["AWS", "Terraform"]}],
+        "summary": "Backend engineer with 7 years building distributed systems.",
+    }}
+    summary = _build_candidate_summary(user, resume_doc)
+    assert "Go, Python, Kubernetes" in summary       # resume skills, not blank
+    assert "AWS" in summary and "Terraform" in summary
+    assert "7 years" in summary
+    assert "Skills: ." not in summary                # the old empty-profile bug
+
+
+def test_candidate_summary_falls_back_to_users_doc_skills():
+    user = {"role_focus": "Data Engineer", "skills": ["Spark", "SQL"]}
+    summary = _build_candidate_summary(user, None)
+    assert "Spark, SQL" in summary
 
 
 def test_merge_ai_result_drops_zero_score_so_ui_falls_back_to_structured():
