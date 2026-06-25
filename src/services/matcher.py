@@ -379,12 +379,7 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     if run_ai and top_matches:
         ai_results = await _ai_refine(user, job_lookup, top_matches[:TOP_N_AI])
         for match in top_matches:
-            ai = ai_results.get(match["job_id"])
-            if ai:
-                match["ai_score"] = ai.get("ai_score")
-                match["ai_reason"] = ai.get("reason")
-                match["skills_gap"] = ai.get("skills_gap", [])
-                match["strengths"] = ai.get("strengths", [])
+            _merge_ai_result(match, ai_results.get(match["job_id"]))
 
         top_matches.sort(key=lambda x: x.get("ai_score") or x["score"], reverse=True)
 
@@ -395,6 +390,24 @@ def _compute_weighted_score(signals: Dict[str, float]) -> int:
     """Combine signals into 0-100 score using match weights."""
     total = sum(signals.get(k, 0.0) * v for k, v in MATCH_WEIGHTS.items())
     return max(0, min(100, round(total * 100)))
+
+
+def _merge_ai_result(match: dict, ai: Optional[dict]) -> None:
+    """Apply an AI refinement result onto a match.
+
+    Only a positive ai_score is persisted. A 0 or missing score is left unset
+    so every consumer (frontend `ai_score ?? score`, the analyze-cache
+    freshness check) falls back to the structured score instead of rendering a
+    misleading 0% match.
+    """
+    if not ai:
+        return
+    score = ai.get("ai_score")
+    if isinstance(score, (int, float)) and score > 0:
+        match["ai_score"] = int(score)
+    match["ai_reason"] = ai.get("reason")
+    match["skills_gap"] = ai.get("skills_gap", [])
+    match["strengths"] = ai.get("strengths", [])
 
 
 def _collect_user_titles(user: dict, resume_doc: Optional[dict] = None) -> List[str]:
