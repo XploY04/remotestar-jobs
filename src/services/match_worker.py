@@ -13,6 +13,8 @@ import asyncio
 import json
 
 import redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.database.operations import db
 from src.services.matcher import run_matching_for_user
@@ -20,6 +22,34 @@ from src.utils.config import settings
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+def _subscribe(redis_client: redis.Redis):
+    """Create a pub/sub handle subscribed to match:start:*."""
+    pubsub = redis_client.pubsub()
+    pubsub.psubscribe("match:start:*")
+    return pubsub
+
+
+def _next_message(pubsub, redis_client: redis.Redis):
+    """Read the next pub/sub message, reconnecting if the connection dropped.
+
+    Upstash (like most managed Redis) closes idle pub/sub connections. redis-py
+    surfaces that as a ConnectionError on the next read. Without this the worker
+    sits on a dead connection receiving nothing while still reporting healthy.
+    Returns (message_or_None, pubsub); a reconnect yields a fresh pubsub.
+    """
+    try:
+        return pubsub.get_message(timeout=1.0), pubsub
+    except (RedisConnectionError, RedisTimeoutError) as err:
+        logger.warning("Redis pub/sub connection lost (%s); reconnecting...", err)
+        try:
+            pubsub.close()
+        except Exception:
+            pass
+        pubsub = _subscribe(redis_client)
+        logger.info("Re-subscribed to match:start:* after reconnect")
+        return None, pubsub
 
 
 async def start_worker() -> None:
@@ -32,17 +62,21 @@ async def start_worker() -> None:
     await db.connect()
     logger.info("Worker connected to MongoDB")
 
-    redis_client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    redis_client = redis.Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        health_check_interval=30,
+        socket_keepalive=True,
+    )
     redis_client.ping()
     logger.info("Worker connected to Redis")
 
-    pubsub = redis_client.pubsub()
-    pubsub.psubscribe("match:start:*")
+    pubsub = _subscribe(redis_client)
     logger.info("Worker listening for match requests on match:start:*")
 
     try:
         while True:
-            message = pubsub.get_message(timeout=1.0)
+            message, pubsub = _next_message(pubsub, redis_client)
             if message and message["type"] == "pmessage":
                 user_id = None
                 try:
