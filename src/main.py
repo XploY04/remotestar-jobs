@@ -39,8 +39,10 @@ async def _run_embed_jobs() -> dict:
 
 
 async def _run_cleanup() -> dict:
+    from src.services.matcher import purge_dead_vectors
     await db.connect()
     result = await db.cleanup_expired_jobs()
+    result["vectors"] = await purge_dead_vectors()
     await db.disconnect()
     return result
 

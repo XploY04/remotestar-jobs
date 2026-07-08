@@ -129,6 +129,38 @@ def _build_user_embed_text(user: dict, resume_doc: Optional[dict] = None) -> str
 # Job embedding (run at ingestion time)
 # ------------------------------------------------------------------
 
+async def purge_dead_vectors() -> Dict[str, Any]:
+    """Delete Pinecone vectors for deleted/archived jobs.
+
+    The matcher filters dead jobs only after the Pinecone query, so their
+    vectors waste top_k slots until removed. Unsets pinecone_embedded_at so
+    a restored job gets re-embedded by the next --embed-jobs run.
+    """
+
+    if not settings.pinecone_api_key:
+        logger.warning("Pinecone API key not set, skipping vector purge")
+        return {"purged": 0}
+
+    index = _get_pinecone_index()
+    query = {
+        "$or": [{"is_deleted": True}, {"is_archived": True}],
+        "pinecone_embedded_at": {"$exists": True},
+    }
+    ids = [doc["_id"] async for doc in db.jobs.find(query, {"_id": 1})]
+
+    batch_size = 500
+    for i in range(0, len(ids), batch_size):
+        batch = ids[i:i + batch_size]
+        index.delete(ids=batch, namespace=PINECONE_NAMESPACE)
+        await db.jobs.update_many(
+            {"_id": {"$in": batch}},
+            {"$unset": {"pinecone_embedded_at": ""}},
+        )
+
+    logger.info("Purged %d dead vectors from Pinecone", len(ids))
+    return {"purged": len(ids)}
+
+
 async def embed_jobs(job_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     """Embed jobs and upsert to Pinecone. Only embeds jobs not already embedded."""
 
