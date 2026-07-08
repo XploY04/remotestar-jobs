@@ -52,8 +52,11 @@ class EnrichmentPipeline:
     When AI is disabled: Raw → fallback extractor (basic field mapping) → done
     """
 
-    def __init__(self, use_ai: bool = None):
+    def __init__(self, use_ai: bool = None, enforce_age_cutoff: bool = True):
         self.use_ai = use_ai if use_ai is not None else settings.enable_ai_enrichment
+        # Ingest drops jobs older than MAX_JOB_AGE_DAYS; re-enrichment of
+        # existing docs must not (they are already in the DB).
+        self.enforce_age_cutoff = enforce_age_cutoff
         self.ai_processor = AIProcessor() if self.use_ai else None
         self.skills_extractor = SkillsExtractor()
         self.quality_scorer = QualityScorer()
@@ -378,7 +381,7 @@ class EnrichmentPipeline:
         # Drop jobs older than MAX_JOB_AGE_DAYS
         cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_JOB_AGE_DAYS)
         posted = job["posted_at"]
-        if isinstance(posted, datetime) and posted < cutoff:
+        if self.enforce_age_cutoff and isinstance(posted, datetime) and posted < cutoff:
             logger.debug("[%s] Dropping old job '%s' (posted %s)", source, job.get('title', ''), posted.date())
             return None
 

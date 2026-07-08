@@ -82,3 +82,17 @@ def test_prompt_version_stamped_only_on_ai_extracted_jobs():
 
     assert "prompt_version" not in fallback_job
     assert ai_job["prompt_version"]
+
+
+def test_age_cutoff_skipped_when_disabled():
+    from datetime import timedelta
+
+    old_posted = datetime.now(timezone.utc) - timedelta(days=60)
+    raw = {"id": "job-3", "title": "Dev", "company": "Acme Corp"}
+    extracted = {"title": "Dev", "company": "Acme Corp", "posted_at": old_posted}
+
+    ingest_pipeline = EnrichmentPipeline(use_ai=False)
+    reenrich_pipeline = EnrichmentPipeline(use_ai=False, enforce_age_cutoff=False)
+
+    assert ingest_pipeline._finalize_job("remoteok", raw, dict(extracted)) is None
+    assert reenrich_pipeline._finalize_job("remoteok", raw, dict(extracted)) is not None

@@ -78,7 +78,7 @@ async def reenrich_stale(
         total = min(total, limit)
     logger.info("Re-enriching %d jobs to prompt_version=%s (batch=%d)", total, PROMPT_VERSION, batch_size)
 
-    pipeline = EnrichmentPipeline(use_ai=True)
+    pipeline = EnrichmentPipeline(use_ai=True, enforce_age_cutoff=False)
     if not (pipeline.ai_processor and pipeline.ai_processor.enabled):
         raise RuntimeError("AI processor not enabled — cannot re-enrich")
 
@@ -136,13 +136,27 @@ async def _reenrich_batch(db, pipeline: EnrichmentPipeline,
             on_batch_ready=None,
         )
 
-        for original, finalized in zip(source_docs, results):
+        # process_source drops jobs it can't finalize, so results can be
+        # shorter than source_docs — pair by identity, never by position.
+        # `id` is derived from the doc's own raw_data and equals `_id` except
+        # for cross-source dedupe restores, where the hash still matches.
+        by_id = {r["id"]: r for r in results if r and r.get("id")}
+        by_hash = {r["title_company_hash"]: r for r in results
+                   if r and r.get("title_company_hash")}
+        for original in source_docs:
+            finalized = by_id.get(original["_id"]) or by_hash.get(original.get("title_company_hash"))
             if not finalized:
                 continue
             update_doc = {k: v for k, v in finalized.items() if k not in PROTECTED}
             update_doc["reenriched_at"] = now
             await db.jobs.update_one(
                 {"_id": original["_id"]},
-                {"$set": update_doc},
+                {
+                    "$set": update_doc,
+                    # Force re-embedding: the Pinecone vector was built from
+                    # the pre-enrichment doc and --embed-jobs only embeds
+                    # jobs without this marker.
+                    "$unset": {"pinecone_embedded_at": ""},
+                },
             )
             per_source[source] = per_source.get(source, 0) + 1
