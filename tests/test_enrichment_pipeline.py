@@ -29,3 +29,40 @@ def test_finalize_job_preserves_raw_description_when_ai_result_has_only_summary(
     assert job["description"] == raw["description"]
     assert job["short_description"] == extracted["short_description"]
 
+
+
+def test_compute_board_rank_orders_by_company_tier_and_seniority():
+    from src.enrichment.enrichment_pipeline import compute_board_rank
+
+    google_intern = compute_board_rank(
+        {"company": "Google India", "company_tier": "top_tech", "seniority_level": "intern"}
+    )
+    startup_junior = compute_board_rank(
+        {"company": "Notion", "company_tier": "hot_startup", "seniority_level": "junior"}
+    )
+    unknown_intern = compute_board_rank(
+        {"company": "Acme Corp", "company_tier": "other", "seniority_level": "intern"}
+    )
+    google_senior = compute_board_rank(
+        {"company": "Google", "company_tier": "top_tech", "seniority_level": "senior"}
+    )
+    unknown_no_seniority = compute_board_rank({"company": "Acme Corp"})
+
+    assert google_intern == 100
+    assert google_intern > startup_junior > unknown_intern > google_senior
+    assert unknown_no_seniority == 25
+
+
+def test_finalize_job_sets_board_rank():
+    pipeline = EnrichmentPipeline(use_ai=False)
+    raw = {"id": "job-1", "title": "SWE Intern", "company": "Acme Corp"}
+    extracted = {
+        "title": "SWE Intern",
+        "company": "Acme Corp",
+        "seniority_level": "intern",
+        "posted_at": datetime.now(timezone.utc),
+    }
+
+    job = pipeline._finalize_job("remoteok", raw, extracted)
+
+    assert job["board_rank"] == 60

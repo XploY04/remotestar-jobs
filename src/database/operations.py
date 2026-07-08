@@ -155,6 +155,8 @@ class Database:
             "apply_options": job_data.get("apply_options"),
             "tags": job_data.get("tags"),
             "quality_score": job_data.get("quality_score"),
+            "company_tier": job_data.get("company_tier"),
+            "board_rank": job_data.get("board_rank"),
             "raw_data": job_data.get("raw_data"),
             "prompt_version": job_data.get("prompt_version"),
             "title_company_hash": title_company_hash,
@@ -275,7 +277,7 @@ class Database:
             projection["score"] = {"$meta": "textScore"}
             sort = [("score", {"$meta": "textScore"}), ("posted_at", DESCENDING)]
         else:
-            sort = [("posted_at", DESCENDING)]
+            sort = [("board_rank", DESCENDING), ("posted_at", DESCENDING)]
 
         cursor = self.jobs.find(query, projection).sort(sort).skip(offset).limit(limit)
         docs = await cursor.to_list(length=limit)
