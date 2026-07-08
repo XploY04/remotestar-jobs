@@ -96,3 +96,33 @@ def test_age_cutoff_skipped_when_disabled():
 
     assert ingest_pipeline._finalize_job("remoteok", raw, dict(extracted)) is None
     assert reenrich_pipeline._finalize_job("remoteok", raw, dict(extracted)) is not None
+
+
+def test_process_with_ai_slims_results_after_batch_save():
+    import asyncio
+
+    pipeline = EnrichmentPipeline(use_ai=False)
+
+    class _FakeProcessor:
+        enabled = True
+
+        def _process_chunk(self, source, chunk):
+            return [{
+                "title": r["title"], "company": "Acme Corp",
+                "seniority_level": "junior", "country": "in",
+                "posted_at": datetime.now(timezone.utc),
+            } for r in chunk]
+
+    pipeline.ai_processor = _FakeProcessor()
+    saved = []
+
+    async def on_batch_ready(batch):
+        saved.extend(batch)
+
+    raw = [{"id": f"j{i}", "title": f"Job {i}"} for i in range(3)]
+    result = asyncio.run(pipeline._process_with_ai("remoteok", raw, 5, 2, on_batch_ready))
+
+    # Callback received full docs; the retained result is slim
+    assert len(saved) == 3 and saved[0].get("raw_data") is not None
+    assert len(result) == 3
+    assert set(result[0].keys()) == {"country", "seniority_level"}
