@@ -238,13 +238,6 @@ async def run_matching_for_all() -> Dict[str, Any]:
         "ran_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    try:
-        from src.services.popularity import compute_job_popularity
-        summary["popularity"] = await compute_job_popularity(db)
-    except Exception as e:
-        logger.error("Popularity recompute failed: %s", e, exc_info=True)
-        summary["popularity"] = {"error": str(e)}
-
     logger.info("Matching complete: %s", summary)
     return summary
 

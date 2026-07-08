@@ -275,7 +275,7 @@ class Database:
             projection["score"] = {"$meta": "textScore"}
             sort = [("score", {"$meta": "textScore"}), ("posted_at", DESCENDING)]
         else:
-            sort = [("ranking_score", DESCENDING), ("posted_at", DESCENDING)]
+            sort = [("posted_at", DESCENDING)]
 
         cursor = self.jobs.find(query, projection).sort(sort).skip(offset).limit(limit)
         docs = await cursor.to_list(length=limit)
