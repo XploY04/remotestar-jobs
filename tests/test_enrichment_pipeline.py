@@ -66,3 +66,19 @@ def test_finalize_job_sets_board_rank():
     job = pipeline._finalize_job("remoteok", raw, extracted)
 
     assert job["board_rank"] == 60
+
+
+def test_prompt_version_stamped_only_on_ai_extracted_jobs():
+    pipeline = EnrichmentPipeline(use_ai=False)
+    raw = {"id": "job-2", "title": "QA Intern", "company": "Acme Corp"}
+    extracted = {
+        "title": "QA Intern",
+        "company": "Acme Corp",
+        "posted_at": datetime.now(timezone.utc),
+    }
+
+    fallback_job = pipeline._finalize_job("remoteok", raw, extracted)
+    ai_job = pipeline._finalize_job("remoteok", raw, dict(extracted), ai_extracted=True)
+
+    assert "prompt_version" not in fallback_job
+    assert ai_job["prompt_version"]
