@@ -23,7 +23,7 @@ pipeline = EnrichmentPipeline(use_ai=settings.enable_ai_enrichment)
 
 async def run_ingestion_cycle(fetcher_classes: List | None = None) -> Dict[str, Any]:
     """Fetch raw → AI process → Save per batch. Each batch of ~5 jobs
-    hits the DB as soon as Gemini finishes processing it.
+    hits the DB as soon as the AI finishes processing it.
 
     When fetcher_classes is None, the orchestrator picks today's scheduled sources.
     Pass ALL_FETCHER_CLASSES explicitly to run everything."""

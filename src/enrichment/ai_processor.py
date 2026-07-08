@@ -3,12 +3,9 @@
 Takes raw API data from any source and outputs the final structured job schema.
 No normalizer needed. The AI handles schema mapping for ALL sources.
 
-Supports Gemini and OpenAI. Uses whichever API key is available in env
-(GEMINI_API_KEY or OPENAI_API_KEY). Gemini is preferred if both are set.
-
-OpenAI path uses structured outputs (json_schema) bound to a Pydantic schema —
-the model cannot omit required fields, cannot wrap the response, cannot return
-wrong types. Gemini still uses json_object mode (no structured-output equivalent).
+OpenAI only (gpt-4o-mini). Uses structured outputs (json_schema) bound to a
+Pydantic schema — the model cannot omit required fields, cannot wrap the
+response, cannot return wrong types.
 """
 
 import json
@@ -98,8 +95,8 @@ class JobsBatch(BaseModel):
 
 # ---------------------------------------------------------------------------
 # System instruction — extraction rules only; the schema is enforced by
-# the structured-outputs response_format on OpenAI, and by the schema block
-# we still include for Gemini's json_object mode.
+# the structured-outputs response_format. The schema block below keeps the
+# field semantics in front of the model.
 # ---------------------------------------------------------------------------
 
 SYSTEM_INSTRUCTION = """You are a job data extraction engine. You extract structured fields from raw job listing data.
@@ -155,14 +152,9 @@ EXTRACTION RULES:
 
 
 class AIProcessor:
-    """AI processor supporting Gemini and OpenAI.
-
-    Uses whichever API key is available. Gemini is preferred if both are set.
-    """
+    """OpenAI-backed extraction (gpt-4o-mini, structured outputs)."""
 
     def __init__(self):
-        self.provider = None
-        self._gemini_model = None
         self._openai_client = None
 
         # Per-source counters consumed by the enrichment pipeline for metrics.
@@ -171,14 +163,12 @@ class AIProcessor:
         self.batch_fallback: Dict[str, int] = {}
         self.batch_failed: Dict[str, int] = {}
 
-        if settings.gemini_api_key:
-            self._init_gemini()
-        elif settings.openai_api_key:
+        if settings.openai_api_key:
             self._init_openai()
         else:
-            logger.warning("No AI API key set (GEMINI_API_KEY or OPENAI_API_KEY) - AI processing disabled")
+            logger.warning("OPENAI_API_KEY not set - AI processing disabled")
 
-        self.enabled = self.provider is not None
+        self.enabled = self._openai_client is not None
 
     def reset_metrics(self, source: str) -> None:
         self.batch_ok[source] = 0
@@ -198,27 +188,10 @@ class AIProcessor:
             "fallback_rate": fallback_rate,
         }
 
-    def _init_gemini(self):
-        import google.generativeai as genai
-        from google.generativeai.types import GenerationConfig
-
-        genai.configure(api_key=settings.gemini_api_key)
-        self._gemini_model = genai.GenerativeModel(
-            model_name='gemini-2.5-flash-lite',
-            system_instruction=SYSTEM_INSTRUCTION,
-            generation_config=GenerationConfig(
-                response_mime_type="application/json",
-                temperature=0,
-            ),
-        )
-        self.provider = "gemini"
-        logger.info("AI processor initialized (provider: Gemini, model: gemini-2.5-flash-lite)")
-
     def _init_openai(self):
         from openai import OpenAI
 
         self._openai_client = OpenAI(api_key=settings.openai_api_key)
-        self.provider = "openai"
         logger.info("AI processor initialized (provider: OpenAI, model: gpt-4o-mini, structured outputs)")
 
     # ------------------------------------------------------------------
@@ -233,15 +206,7 @@ class AIProcessor:
             raw_str = json.dumps(raw_job, default=str, ensure_ascii=False)
             prompt = f'Extract this job from source "{source}" into the schema.\n\n{raw_str}'
 
-            if self.provider == "openai":
-                result = self._call_openai_single(prompt)
-            else:
-                result = self._call_gemini(prompt)
-                if isinstance(result, list):
-                    result = result[0] if result else None
-                elif isinstance(result, dict) and "jobs" in result:
-                    jobs = result["jobs"]
-                    result = jobs[0] if jobs else None
+            result = self._call_openai_single(prompt)
 
             if result:
                 logger.info(f"AI processed: {result.get('title', '?')[:50]} @ {result.get('company', '?')}")
@@ -285,11 +250,7 @@ class AIProcessor:
                 f"in the same order as the input.\n\n{joined}"
             )
 
-            if self.provider == "openai":
-                result = self._call_openai_batch(prompt)
-            else:
-                raw = self._call_gemini(prompt)
-                result = self._unwrap_array(raw, n)
+            result = self._call_openai_batch(prompt)
 
             if isinstance(result, list) and len(result) == n:
                 logger.info(f"[{source}] Batch OK: {n} jobs in 1 API call")
@@ -314,27 +275,9 @@ class AIProcessor:
         self.batch_fallback[source] = self.batch_fallback.get(source, 0) + 1
         return [self.process_raw_job(source, raw_job) for raw_job in chunk]
 
-    @staticmethod
-    def _unwrap_array(result: Any, n: int) -> Any:
-        """Gemini json_object mode can wrap arrays in an object. Unwrap to the inner list."""
-        if not isinstance(result, dict):
-            return result
-        for key in ("jobs", "results", "items", "data", "output", "extracted"):
-            value = result.get(key)
-            if isinstance(value, list):
-                return value
-        list_values = [v for v in result.values() if isinstance(v, list)]
-        if len(list_values) == 1:
-            return list_values[0]
-        return result
-
     # ------------------------------------------------------------------
     # Provider calls
     # ------------------------------------------------------------------
-
-    def _call_gemini(self, prompt: str) -> Any:
-        response = self._gemini_model.generate_content(prompt)
-        return json.loads(response.text)
 
     def _call_openai_batch(self, prompt: str) -> List[Dict[str, Any]]:
         """Structured-outputs batch call. Returns list of dicts, never raises on shape."""
