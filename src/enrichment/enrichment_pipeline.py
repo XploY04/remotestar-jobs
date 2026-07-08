@@ -159,9 +159,13 @@ class EnrichmentPipeline:
                             if fb:
                                 finalized.append(fb)
 
-                    # Save this batch to DB immediately if callback provided
+                    # Save this batch to DB immediately if callback provided.
+                    # Once saved, keep only the fields ingest metrics read —
+                    # accumulating full docs (raw_data included) for an
+                    # 11k-job source OOMs the 4GB droplet.
                     if on_batch_ready and finalized:
                         await on_batch_ready(finalized)
+                        finalized = self._slim_jobs(finalized)
 
                     done = (chunk_idx + 1) * batch_size
                     logger.info(f"[{source}] Batch {chunk_idx + 1}/{len(chunks)} done ({min(done, total)}/{total} jobs)")
@@ -172,6 +176,7 @@ class EnrichmentPipeline:
                     fallbacks = [fb for raw_job in chunk if (fb := self._fallback_extract(source, raw_job))]
                     if on_batch_ready and fallbacks:
                         await on_batch_ready(fallbacks)
+                        fallbacks = self._slim_jobs(fallbacks)
                     return fallbacks
 
         tasks = [process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
@@ -183,6 +188,12 @@ class EnrichmentPipeline:
         for batch in batch_results:
             all_jobs.extend(batch)
         return all_jobs
+
+    @staticmethod
+    def _slim_jobs(jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Reduce already-saved jobs to what save_query_metrics reads."""
+        return [{"country": j.get("country"), "seniority_level": j.get("seniority_level")}
+                for j in jobs]
 
     # ------------------------------------------------------------------
     # Fallback processing (no AI)

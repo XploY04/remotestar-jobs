@@ -36,9 +36,10 @@ class Settings(BaseSettings):
     ats_detail_min_description: int = 200
 
     # Adzuna returns only a description snippet; fetch the redirect_url page
-    # for full text when the snippet is shorter than this.
+    # for full text when the description is shorter than this. Snippets run
+    # 300-800 chars, so the bar sits above them; real descriptions skip it.
     enable_adzuna_detail_fetch: bool = True
-    adzuna_detail_min_description: int = 300
+    adzuna_detail_min_description: int = 2000
 
     # Query planning
     enable_query_planner: bool = True
