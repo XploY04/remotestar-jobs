@@ -22,6 +22,25 @@ logger = setup_logger(__name__)
 # Jobs older than this are dropped during ingestion
 MAX_JOB_AGE_DAYS = 15
 
+# ---------------------------------------------------------------------------
+# Board rank: decides job-board ordering (higher = closer to the top).
+# board_rank = company component (AI company_tier) + audience-fit component
+# (existing seniority_level; our audience is interns/juniors).
+# ---------------------------------------------------------------------------
+
+COMPANY_RANK = {"top_tech": 50, "hot_startup": 45, "established": 25, "other": 10}
+LEVEL_RANK = {"intern": 50, "junior": 45, "mid": 20, "senior": 5,
+              "staff": 5, "principal": 5, "lead": 5, "manager": 5}
+UNKNOWN_LEVEL_RANK = 15
+
+
+def compute_board_rank(job: Dict[str, Any]) -> int:
+    tier = job.get("company_tier") or "other"
+    company_rank = COMPANY_RANK.get(tier, COMPANY_RANK["other"])
+    seniority = job.get("seniority_level")
+    level_rank = LEVEL_RANK.get(seniority, UNKNOWN_LEVEL_RANK) if seniority else UNKNOWN_LEVEL_RANK
+    return company_rank + level_rank
+
 
 class EnrichmentPipeline:
     """
@@ -381,6 +400,9 @@ class EnrichmentPipeline:
 
         # Quality score (rule-based, fast)
         job["quality_score"] = self.quality_scorer.score(job)
+
+        # Board rank (deterministic; recomputed on every re-enrich)
+        job["board_rank"] = compute_board_rank(job)
 
         # Track which prompt version produced this enrichment (only set on AI path)
         if self.use_ai and self.ai_processor and self.ai_processor.enabled:

@@ -29,7 +29,8 @@ BATCH_SIZE = 5
 # v2: slimmed schema (~20 fields), OpenAI structured outputs.
 # v3: country tightened to ISO 3166 alpha-2 lowercase via Literal enum.
 # v4: AI now produces a long-form description, not only a short summary.
-PROMPT_VERSION = "v4"
+# v5: added company_tier classification (drives board_rank ordering).
+PROMPT_VERSION = "v5"
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ Category = Literal[
     "data", "ml", "security", "qa", "design", "product", "general",
 ]
 VisaSponsorship = Literal["yes", "no", "unknown"]
+CompanyTier = Literal["top_tech", "hot_startup", "established", "other"]
 CountryCode = Literal[
     "ad", "ae", "af", "ag", "ai", "al", "am", "ao", "aq", "ar", "as", "at", "au", "aw", "ax", "az",
     "ba", "bb", "bd", "be", "bf", "bg", "bh", "bi", "bj", "bl", "bm", "bn", "bo", "bq", "br", "bs",
@@ -87,6 +89,7 @@ class JobExtraction(BaseModel):
     benefits: List[str]
     visa_sponsorship: VisaSponsorship
     application_deadline: Optional[str]
+    company_tier: CompanyTier
 
 
 class JobsBatch(BaseModel):
@@ -124,7 +127,8 @@ OUTPUT SCHEMA — every job object must match this structure:
   "key_responsibilities": ["resp1", "resp2"],
   "benefits": ["benefit1", "benefit2"],
   "visa_sponsorship": "yes|no|unknown",
-  "application_deadline": "YYYY-MM-DD or null"
+  "application_deadline": "YYYY-MM-DD or null",
+  "company_tier": "top_tech|hot_startup|established|other"
 }
 
 EXTRACTION RULES:
@@ -146,7 +150,8 @@ EXTRACTION RULES:
 16. For "benefits": Health insurance, 401k, PTO, equity, etc. Max 10.
 17. For "visa_sponsorship": "yes" ONLY if explicitly mentioned. "unknown" if not discussed.
 18. Max 20 skills, 8 responsibilities, 10 benefits.
-19. For SINGLE job requests: return a JSON object. For BATCH requests: return {"jobs": [...]} with the array in the same order as the input."""
+19. For "company_tier": Classify the COMPANY (not the role). "top_tech" = globally famous large tech companies (Google, Meta, Apple, Amazon, Microsoft, Netflix, Nvidia and peers). "hot_startup" = well-known high-profile startups/scaleups (OpenAI, Anthropic, Notion, Stripe, Figma and similar). "established" = other recognizable mid/large companies (IT services firms, banks, older unicorns). "other" = everything else or unknown companies.
+20. For SINGLE job requests: return a JSON object. For BATCH requests: return {"jobs": [...]} with the array in the same order as the input."""
 
 
 class AIProcessor:

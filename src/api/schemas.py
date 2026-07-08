@@ -68,6 +68,8 @@ class JobResponse(BaseModel):
     # ── Quality / Meta ──
     tags: Optional[List[str]] = None
     quality_score: Optional[int] = None
+    company_tier: Optional[str] = None
+    board_rank: Optional[int] = None
 
 
 class JobsListResponse(BaseModel):
