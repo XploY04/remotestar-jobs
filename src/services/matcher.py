@@ -20,12 +20,14 @@ from pydantic import BaseModel
 
 from src.database.operations import db
 from src.services.match_scorer import (
+    compute_idf,
     compute_total,
     experience_fit_score,
     is_stretch_match,
     location_match_score,
-    salary_fit_score,
     seniority_fit_score,
+    seniority_gate,
+    skills_match_score,
     title_similarity_score,
 )
 from src.utils.config import settings
@@ -40,16 +42,6 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 TOP_N_VECTOR = 100       # Top results from Pinecone
 TOP_N_STRUCTURED = 50    # Keep after structured scoring
 TOP_N_AI = 20            # Send to AI refinement
-
-# Skills match is computed via vector similarity (semantic match between user profile and job)
-MATCH_WEIGHTS = {
-    "skills_match": 0.40,
-    "title_similarity": 0.20,
-    "seniority_fit": 0.15,
-    "location_match": 0.15,
-    "experience_fit": 0.05,
-    "salary_fit": 0.05,
-}
 
 _openai_client: Optional[OpenAI] = None
 _pinecone_index = None
@@ -360,6 +352,9 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
 
     _progress("scoring", f"Scoring {len(job_docs)} candidate jobs...", 35)
 
+    user_skills = _collect_user_skills(user, resume_doc)
+    idf_weights = compute_idf(job_docs)
+
     # Stage 2: Structured scoring on Pinecone results
     scored = []
     for job_id, vector_score in similarity_map.items():
@@ -367,16 +362,20 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
         if not job:
             continue
 
+        # Hard filter: never surface jobs 2+ seniority levels away
+        if not seniority_gate(user_level, job.get("seniority_level")):
+            continue
+
         signals = {
-            "skills_match": vector_score,
+            "skills_match": skills_match_score(user_skills, job.get("skills") or [], idf_weights),
+            "semantic_fit": vector_score,
             "title_similarity": title_similarity_score(user_titles, job.get("title", "")),
             "seniority_fit": seniority_fit_score(user_level, job.get("seniority_level")),
             "location_match": location_match_score(user_location, job.get("country"), job.get("is_remote")),
             "experience_fit": experience_fit_score(user_years, job.get("required_experience_years")),
-            "salary_fit": salary_fit_score(None, job.get("salary_min"), job.get("salary_max")),
         }
 
-        score = _compute_weighted_score(signals)
+        score = compute_total(signals)
         if score < 25:
             continue
 
@@ -412,12 +411,6 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     return top_matches
 
 
-def _compute_weighted_score(signals: Dict[str, float]) -> int:
-    """Combine signals into 0-100 score using match weights."""
-    total = sum(signals.get(k, 0.0) * v for k, v in MATCH_WEIGHTS.items())
-    return max(0, min(100, round(total * 100)))
-
-
 def _merge_ai_result(match: dict, ai: Optional[dict]) -> None:
     """Apply an AI refinement result onto a match.
 
@@ -434,6 +427,31 @@ def _merge_ai_result(match: dict, ai: Optional[dict]) -> None:
     match["ai_reason"] = ai.get("reason")
     match["skills_gap"] = ai.get("skills_gap", [])
     match["strengths"] = ai.get("strengths", [])
+
+
+def _collect_user_skills(user: dict, resume_doc: Optional[dict] = None) -> List[str]:
+    """Union of users-doc skills, parsed-resume skills, and experience
+    technologies (same sources as _build_candidate_summary)."""
+    skills = list(user.get("skills") or [])
+
+    profile = (resume_doc or {}).get("editable_profile") or {}
+    for s in (profile.get("skills") or []):
+        if isinstance(s, dict) and s.get("name"):
+            skills.append(s["name"])
+    for exp in (profile.get("experiences") or []):
+        for tech in (exp.get("technologies") or []):
+            if tech:
+                skills.append(tech)
+
+    deduped = []
+    seen = set()
+    for skill in skills:
+        key = skill.lower().strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(skill)
+    return deduped
 
 
 def _collect_user_titles(user: dict, resume_doc: Optional[dict] = None) -> List[str]:

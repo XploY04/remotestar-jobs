@@ -12,14 +12,16 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Set
 
-# Weights for the final score
+# Weights for the final score (single source of truth; matcher uses
+# compute_total with these). Audience is intern/junior candidates, so
+# seniority outweighs skills; the hard exclusion is seniority_gate.
 WEIGHTS = {
-    "skills_match": 0.35,
-    "title_similarity": 0.20,
-    "seniority_fit": 0.15,
-    "location_match": 0.15,
-    "experience_fit": 0.10,
-    "salary_fit": 0.05,
+    "seniority_fit": 0.30,
+    "skills_match": 0.25,     # TF-IDF skill overlap (skills_match_score)
+    "semantic_fit": 0.15,     # Pinecone cosine similarity
+    "title_similarity": 0.15,
+    "location_match": 0.10,
+    "experience_fit": 0.05,
 }
 
 # Seniority levels in order (index = rank)
@@ -146,6 +148,20 @@ def _get_role_category(title: str) -> Optional[str]:
     return None
 
 
+def seniority_gate(user_level: Optional[str], job_level: Optional[str]) -> bool:
+    """Hard filter: candidates never see jobs 2+ ladder steps away
+    (a junior gets intern/junior/mid, never senior+). Weights only order
+    results; exclusion has to happen before scoring. Unknown levels pass —
+    penalizing them is seniority_fit's job."""
+    if not user_level or not job_level:
+        return True
+    user_idx = _seniority_index(user_level)
+    job_idx = _seniority_index(job_level)
+    if user_idx is None or job_idx is None:
+        return True
+    return abs(user_idx - job_idx) < 2
+
+
 def seniority_fit_score(user_level: Optional[str], job_level: Optional[str]) -> float:
     """Score based on seniority distance. Exact=1.0, adjacent=0.6, far=0."""
     if not user_level or not job_level:
@@ -247,36 +263,6 @@ def experience_fit_score(
     elif diff >= -3:
         return 0.3  # slightly under
     return 0.1  # significantly under
-
-
-def salary_fit_score(
-    user_salary: Optional[int],
-    job_salary_min: Optional[str],
-    job_salary_max: Optional[str],
-) -> float:
-    """Score salary fit if both sides have data."""
-    if user_salary is None:
-        return 0.5  # unknown = neutral
-
-    try:
-        jmin = int(float(job_salary_min)) if job_salary_min else None
-        jmax = int(float(job_salary_max)) if job_salary_max else None
-    except (ValueError, TypeError):
-        return 0.5
-
-    if jmin is None and jmax is None:
-        return 0.5
-
-    job_mid = ((jmin or 0) + (jmax or jmin or 0)) / 2
-    if job_mid == 0:
-        return 0.5
-
-    ratio = user_salary / job_mid
-    if 0.8 <= ratio <= 1.2:
-        return 1.0
-    elif 0.6 <= ratio <= 1.5:
-        return 0.5
-    return 0.1
 
 
 def compute_total(signals: Dict[str, float], weights: Optional[Dict[str, float]] = None) -> int:
