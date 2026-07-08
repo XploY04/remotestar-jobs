@@ -148,7 +148,7 @@ class EnrichmentPipeline:
                     finalized = []
                     for raw_job, ai_result in zip(chunk, ai_results):
                         if ai_result:
-                            result = self._finalize_job(source, raw_job, ai_result)
+                            result = self._finalize_job(source, raw_job, ai_result, ai_extracted=True)
                             if result:
                                 finalized.append(result)
                         else:
@@ -341,7 +341,8 @@ class EnrichmentPipeline:
     # ------------------------------------------------------------------
 
     def _finalize_job(self, source: str, raw_job: Dict[str, Any],
-                      extracted: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                      extracted: Dict[str, Any],
+                      ai_extracted: bool = False) -> Optional[Dict[str, Any]]:
         """Add system-level fields that aren't part of AI extraction."""
         
         job = extracted.copy()
@@ -404,8 +405,10 @@ class EnrichmentPipeline:
         # Board rank (deterministic; recomputed on every re-enrich)
         job["board_rank"] = compute_board_rank(job)
 
-        # Track which prompt version produced this enrichment (only set on AI path)
-        if self.use_ai and self.ai_processor and self.ai_processor.enabled:
+        # Track which prompt version produced this enrichment. Only stamp jobs
+        # the AI actually extracted — fallback-extracted jobs must stay
+        # unstamped so --reenrich-stale retries them later.
+        if ai_extracted:
             job["prompt_version"] = PROMPT_VERSION
 
         # Title+company hash for dedup
