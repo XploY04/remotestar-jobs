@@ -1,6 +1,6 @@
-"""Job processing pipeline: Raw API data → Gemini AI → Structured schema.
+"""Job processing pipeline: Raw API data → OpenAI → Structured schema.
 
-NO normalizer. Gemini sees the full raw data and extracts everything.
+NO normalizer. The AI sees the full raw data and extracts everything.
 For jobs where AI is disabled or fails, a lightweight fallback extractor runs.
 """
 
@@ -48,7 +48,7 @@ class EnrichmentPipeline:
     
     Flow: Raw API data → AI extraction → structured job dict → DB
     
-    When AI is enabled:  Raw → Gemini (extracts all 40 fields) → quality score → done
+    When AI is enabled:  Raw → OpenAI (extracts all fields) → quality score → done
     When AI is disabled: Raw → fallback extractor (basic field mapping) → done
     """
 
@@ -76,7 +76,7 @@ class EnrichmentPipeline:
         """
         Process ALL raw jobs from a single source into final structured format.
         
-        Uses BATCH AI processing: sends `batch_size` jobs per Gemini call,
+        Uses BATCH AI processing: sends `batch_size` jobs per AI call,
         with up to `max_concurrent` batch calls in parallel.
         
         If `on_batch_ready` is provided, each finished batch is passed to it
@@ -118,7 +118,7 @@ class EnrichmentPipeline:
     async def _process_with_ai(self, source: str, raw_jobs: List[Dict[str, Any]],
                                 batch_size: int, max_concurrent: int,
                                 on_batch_ready: Optional[Callable] = None) -> List[Dict[str, Any]]:
-        """Send raw jobs to Gemini in batches for structured extraction.
+        """Send raw jobs to the AI in batches for structured extraction.
         
         Chunks raw_jobs into groups of `batch_size`, then fires up to
         `max_concurrent` batch API calls in parallel using a dedicated thread pool.

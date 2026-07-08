@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     rapidapi_key: Optional[str] = None
     adzuna_app_id: Optional[str] = None
     adzuna_api_key: Optional[str] = None
-    gemini_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     pinecone_api_key: Optional[str] = None
     pinecone_index: Optional[str] = None
@@ -53,6 +52,9 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # Leftover keys in a .env (e.g. GEMINI_API_KEY after the Gemini
+        # removal) must not crash startup.
+        extra = "ignore"
 
 
 settings = Settings()
