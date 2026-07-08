@@ -113,3 +113,19 @@ def test_import_all_agents():
     assert JSearchFetcher is not None
     assert AdzunaFetcher is not None
     assert BaseFetcher is not None
+
+
+def test_adzuna_page_to_text_strips_scripts_and_caps():
+    from src.agents.adzuna import AdzunaFetcher
+
+    html = """
+    <html><head><style>.x{color:red}</style>
+    <script>var tracking = "junk";</script></head>
+    <body><h1>Backend  Intern</h1><p>Build   APIs with <b>Python</b>.</p>
+    <noscript>enable js</noscript></body></html>
+    """
+    text = AdzunaFetcher._page_to_text(html)
+    assert text == "Backend Intern Build APIs with Python ."
+    assert "tracking" not in text and "color" not in text
+
+    assert len(AdzunaFetcher._page_to_text("<p>" + "a" * 50_000 + "</p>")) == AdzunaFetcher.PAGE_TEXT_CAP

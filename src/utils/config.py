@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     enable_ats_detail_fetch: bool = True
     ats_detail_min_description: int = 200
 
+    # Adzuna returns only a description snippet; fetch the redirect_url page
+    # for full text when the snippet is shorter than this.
+    enable_adzuna_detail_fetch: bool = True
+    adzuna_detail_min_description: int = 300
+
     # Query planning
     enable_query_planner: bool = True
     query_planner_model: str = "gpt-4o-mini"

@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import Any, Dict, List
 
 import aiohttp
@@ -18,6 +19,12 @@ class AdzunaFetcher(BaseFetcher):
     COUNTRIES = ["in", "us", "gb"]
     CATEGORY = "it-jobs"
     MAX_PAGES = 20  # 20 pages × 100 results = 2000 jobs per country
+    DETAIL_CONCURRENCY = 10
+    PAGE_TEXT_CAP = 30_000  # chars of page text kept for the AI
+    PAGE_FETCH_HEADERS = {
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"),
+    }
 
     def __init__(self) -> None:
         super().__init__("adzuna")
@@ -58,7 +65,9 @@ class AdzunaFetcher(BaseFetcher):
                 collected.extend(query_jobs)
                 await asyncio.sleep(0.2)
 
-        unique_jobs = self._dedupe_jobs(collected)
+            unique_jobs = self._dedupe_jobs(collected)
+            await self._fetch_full_descriptions(session, unique_jobs)
+
         logger.info("[%s] Total unique jobs collected: %d (NO FILTERING - %d before dedupe)",
                     self.source_name, len(unique_jobs), len(collected))
         return unique_jobs
@@ -153,6 +162,60 @@ class AdzunaFetcher(BaseFetcher):
             job['_country'] = source_query.canonical_country
             job['_source_priority'] = source_query.priority
         return jobs
+
+    async def _fetch_full_descriptions(self, session: aiohttp.ClientSession,
+                                       jobs: List[Dict[str, Any]]) -> None:
+        """Adzuna's API returns only a description snippet. Fetch each job's
+        redirect_url page and attach its text as full_description so the AI
+        extraction sees the real listing. Best-effort: redirect targets are
+        arbitrary partner sites, so failures keep the snippet."""
+
+        if not settings.enable_adzuna_detail_fetch or not jobs:
+            return
+
+        min_len = settings.adzuna_detail_min_description
+        targets = [j for j in jobs
+                   if j.get("redirect_url") and len(j.get("description") or "") < min_len]
+        if not targets:
+            return
+
+        logger.info("[%s] Fetching full descriptions for %d snippet-only jobs",
+                    self.source_name, len(targets))
+        sem = asyncio.Semaphore(self.DETAIL_CONCURRENCY)
+        fetched = 0
+
+        async def fill(job: Dict[str, Any]) -> None:
+            nonlocal fetched
+            async with sem:
+                text = await self._fetch_page_text(session, job["redirect_url"])
+                if text:
+                    job["full_description"] = text
+                    fetched += 1
+                await asyncio.sleep(0.1)
+
+        await asyncio.gather(*(fill(j) for j in targets))
+        logger.info("[%s] Full descriptions fetched: %d/%d", self.source_name, fetched, len(targets))
+
+    async def _fetch_page_text(self, session: aiohttp.ClientSession, url: str) -> str:
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20),
+                                   headers=self.PAGE_FETCH_HEADERS) as response:
+                if response.status != 200:
+                    return ""
+                html = await response.text(errors="ignore")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("[%s] Page fetch failed for %s: %s", self.source_name, url, exc)
+            return ""
+        return self._page_to_text(html)
+
+    @classmethod
+    def _page_to_text(cls, html: str) -> str:
+        if not html:
+            return ""
+        html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:cls.PAGE_TEXT_CAP]
 
     def _dedupe_jobs(self, jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         seen_ids = set()
