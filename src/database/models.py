@@ -33,10 +33,6 @@ async def ensure_indexes(db) -> None:
     await jobs.create_index([("is_remote", ASCENDING)], name="idx_is_remote")
     await jobs.create_index([("seniority_level", ASCENDING)], name="idx_seniority")
     await jobs.create_index([("application_deadline", ASCENDING)], name="idx_application_deadline")
-    await jobs.create_index(
-        [("ranking_score", DESCENDING), ("posted_at", DESCENDING)],
-        name="idx_ranking_posted",
-    )
 
     # Job matches indexes
     matches = db["job_matches"]
