@@ -20,6 +20,13 @@ logger = setup_logger(__name__)
 
 BATCH_SIZE = 5
 
+# Per-job cap on raw JSON characters sent to the model. Some sources store
+# huge raw payloads (ats_scraper caps fields at 1M chars); uncapped, a batch
+# exceeds gpt-4o-mini's 128k-token context, the single-job retry fails too,
+# and the job permanently falls back to non-AI extraction. ~40k chars is
+# ~10k tokens, so a batch of 5 stays comfortably inside the window.
+MAX_RAW_CHARS_PER_JOB = 40_000
+
 # Bump when SYSTEM_INSTRUCTION or extraction schema changes. Used by
 # `--reenrich-stale` to identify jobs that need to be re-processed.
 # v1: original 27-field schema, json_object mode.
@@ -203,7 +210,7 @@ class AIProcessor:
             return None
 
         try:
-            raw_str = json.dumps(raw_job, default=str, ensure_ascii=False)
+            raw_str = json.dumps(raw_job, default=str, ensure_ascii=False)[:MAX_RAW_CHARS_PER_JOB]
             prompt = f'Extract this job from source "{source}" into the schema.\n\n{raw_str}'
 
             result = self._call_openai_single(prompt)
@@ -240,7 +247,7 @@ class AIProcessor:
         try:
             jobs_block = []
             for idx, raw_job in enumerate(chunk):
-                raw_str = json.dumps(raw_job, default=str, ensure_ascii=False)
+                raw_str = json.dumps(raw_job, default=str, ensure_ascii=False)[:MAX_RAW_CHARS_PER_JOB]
                 jobs_block.append(f"=== JOB {idx + 1} of {n} ===\n{raw_str}")
 
             joined = "\n\n".join(jobs_block)
