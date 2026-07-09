@@ -7,7 +7,7 @@ save_jobs, which would treat them as duplicates and skip).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from src.enrichment.ai_processor import PROMPT_VERSION
@@ -50,12 +50,20 @@ async def reenrich_stale(
         "raw_data": {"$exists": True, "$ne": None},
     }
     if mode == "stale":
+        # Docs whose AI extraction keeps failing (e.g. OpenAI content-filter
+        # rejections) come back from a run still unstamped; without a backoff
+        # every run retries the same failing docs first. Retry them weekly.
+        retry_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         criteria = {
             **base,
             "$or": [
                 {"prompt_version": {"$exists": False}},
                 {"prompt_version": {"$ne": PROMPT_VERSION}},
             ],
+            "$and": [{"$or": [
+                {"reenriched_at": {"$exists": False}},
+                {"reenriched_at": {"$lt": retry_cutoff}},
+            ]}],
         }
     elif mode == "low_info":
         criteria = {
