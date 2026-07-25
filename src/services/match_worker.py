@@ -17,7 +17,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.database.operations import db
-from src.services.matcher import run_matching_for_user
+from src.services.matcher import MatchingUnavailableError, run_matching_for_user
 from src.utils.config import settings
 from src.utils.logger import setup_logger
 
@@ -93,7 +93,16 @@ async def start_worker() -> None:
                     logger.error("Invalid JSON in match:start message: %s", message["data"])
                 except Exception as e:
                     if user_id:
-                        error_event = json.dumps({"stage": "error", "message": str(e)})
+                        # Never leak raw provider errors to the client. Known
+                        # transient failures carry their own friendly message;
+                        # everything else gets a generic one. Full detail is
+                        # still logged below.
+                        message = (
+                            str(e)
+                            if isinstance(e, MatchingUnavailableError)
+                            else "Something went wrong while matching. Please try again."
+                        )
+                        error_event = json.dumps({"stage": "error", "message": message})
                         redis_client.publish(f"match:progress:{user_id}", error_event)
                     logger.error("Error processing match request: %s", e, exc_info=True)
                 finally:

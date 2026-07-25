@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -62,10 +63,31 @@ def _get_pinecone_index():
     return _pinecone_index
 
 
+class MatchingUnavailableError(Exception):
+    """Raised when matching can't proceed because of a transient upstream
+    failure (e.g. OpenAI 5xx while embedding the profile). Carries a
+    user-facing message so the worker doesn't surface raw provider errors."""
+
+
 def _embed_text(text: str) -> List[float]:
-    """Generate embedding using OpenAI text-embedding-3-large."""
-    response = _get_openai().embeddings.create(model=EMBEDDING_MODEL, input=text)
-    return response.data[0].embedding
+    """Generate embedding using OpenAI text-embedding-3-large.
+
+    Retries a few times on transient errors so one OpenAI blip doesn't abort
+    the whole match run. On final failure raises MatchingUnavailableError with a
+    friendly message; the user keeps their existing matches and can retry."""
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            response = _get_openai().embeddings.create(model=EMBEDDING_MODEL, input=text)
+            return response.data[0].embedding
+        except Exception as e:  # noqa: BLE001 - transient upstream error, retried below
+            last_err = e
+            logger.warning("Embedding attempt %d/3 failed: %s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise MatchingUnavailableError(
+        "Job matching is temporarily unavailable. Please try again in a minute."
+    ) from last_err
 
 
 def build_job_embed_text(job: dict) -> str:
