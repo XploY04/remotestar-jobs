@@ -86,6 +86,24 @@ def _embed_text(text: str) -> List[float]:
     ) from last_err
 
 
+def _embed_texts(texts: List[str]) -> List[List[float]]:
+    """Embed a batch of texts in a single API call, order preserved. Retries on
+    transient errors so one blip doesn't abort a whole re-embed batch."""
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            response = _get_openai().embeddings.create(model=EMBEDDING_MODEL, input=texts)
+            return [d.embedding for d in response.data]
+        except Exception as e:  # noqa: BLE001 - transient upstream error, retried below
+            last_err = e
+            logger.warning("Batch embedding attempt %d/3 failed: %s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise MatchingUnavailableError(
+        "Job matching is temporarily unavailable. Please try again in a minute."
+    ) from last_err
+
+
 def build_job_embed_text(job: dict) -> str:
     """Text to embed for a job: title + skills only.
 
@@ -182,16 +200,24 @@ async def embed_jobs(job_ids: Optional[List[str]] = None) -> Dict[str, Any]:
 
     for i in range(0, len(jobs), batch_size):
         batch = jobs[i:i + batch_size]
+
+        indexed = [(job, build_job_embed_text(job)) for job in batch]
+        indexed = [(job, text) for job, text in indexed if text.strip()]
+        if not indexed:
+            continue
+
+        try:
+            embeddings = _embed_texts([text for _, text in indexed])
+        except Exception as e:
+            logger.error("Failed to embed batch %d-%d: %s", i, i + len(batch), e)
+            continue
+
         vectors = []
-
-        for job in batch:
-            text = build_job_embed_text(job)
-            if not text.strip():
-                continue
-
-            try:
-                embedding = _embed_text(text)
-                metadata = {
+        for (job, _text), embedding in zip(indexed, embeddings):
+            vectors.append({
+                "id": job["_id"],
+                "values": embedding,
+                "metadata": {
                     "title": job.get("title") or "",
                     "company": job.get("company") or "",
                     "category": job.get("category") or "",
@@ -199,14 +225,8 @@ async def embed_jobs(job_ids: Optional[List[str]] = None) -> Dict[str, Any]:
                     "country": job.get("country") or "",
                     "is_remote": bool(job.get("is_remote")),
                     "source": job.get("source") or "",
-                }
-                vectors.append({
-                    "id": job["_id"],
-                    "values": embedding,
-                    "metadata": metadata,
-                })
-            except Exception as e:
-                logger.error("Failed to embed job %s: %s", job["_id"], e)
+                },
+            })
 
         if vectors:
             index.upsert(vectors=vectors, namespace=PINECONE_NAMESPACE)
