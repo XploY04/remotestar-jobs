@@ -21,15 +21,11 @@ from pydantic import BaseModel
 
 from src.database.operations import db
 from src.services.match_scorer import (
-    compute_idf,
-    compute_total,
-    experience_fit_score,
-    is_stretch_match,
-    location_match_score,
-    seniority_fit_score,
-    seniority_gate,
-    skills_match_score,
-    title_similarity_score,
+    MIN_RELEVANCE,
+    country_score,
+    match_percent,
+    seniority_score,
+    years_score,
 )
 from src.utils.config import settings
 from src.utils.logger import setup_logger
@@ -91,50 +87,36 @@ def _embed_text(text: str) -> List[float]:
 
 
 def build_job_embed_text(job: dict) -> str:
-    """Build the text to embed for a job."""
+    """Text to embed for a job: title + skills only.
+
+    Seniority, country, and experience are hard gates in scoring, not part of
+    the vector; the cosine is a pure role/skills relevance signal."""
     parts = []
     if job.get("title"):
         parts.append(f"Title: {job['title']}")
     if job.get("skills"):
         parts.append(f"Skills: {', '.join(job['skills'][:20])}")
-    if job.get("seniority_level"):
-        parts.append(f"Seniority: {job['seniority_level']}")
-    if job.get("short_description"):
-        parts.append(f"Description: {job['short_description'][:500]}")
-    elif job.get("description"):
-        parts.append(f"Description: {job['description'][:500]}")
-    if job.get("category"):
-        parts.append(f"Category: {job['category']}")
     return "\n".join(parts)
 
 
 def _build_user_embed_text(user: dict, resume_doc: Optional[dict] = None) -> str:
-    """Build the text to embed for a user profile."""
+    """Text to embed for a candidate: role + skills only.
+
+    Mirrors build_job_embed_text so the cosine is a pure role/skills match.
+    Seniority, country, and years are hard gates in scoring, not embedded."""
     parts = []
     if user.get("role_focus"):
         parts.append(f"Role: {user['role_focus']}")
-    if user.get("skills"):
-        parts.append(f"Skills: {', '.join(user['skills'][:20])}")
-    if user.get("seniority_level"):
-        parts.append(f"Seniority: {user['seniority_level']}")
-    if user.get("years_of_experience") is not None:
-        parts.append(f"Experience: {user['years_of_experience']} years")
 
+    skills = list(user.get("skills") or [])
     if resume_doc:
         profile = resume_doc.get("editable_profile") or {}
-        # Add technologies from experiences
-        techs = set()
         for exp in (profile.get("experiences") or []):
             for tech in (exp.get("technologies") or []):
-                techs.add(tech)
-        if techs:
-            existing = set(user.get("skills") or [])
-            new_techs = techs - existing
-            if new_techs:
-                parts.append(f"Additional technologies: {', '.join(list(new_techs)[:10])}")
-        # Add summary
-        if profile.get("summary"):
-            parts.append(f"Summary: {profile['summary'][:300]}")
+                if tech and tech not in skills:
+                    skills.append(tech)
+    if skills:
+        parts.append(f"Skills: {', '.join(skills[:30])}")
 
     return "\n".join(parts)
 
@@ -333,17 +315,9 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
 
     _progress("embedding", "Embedding your profile...", 5)
     user_embedding = _embed_text(user_text)
-    user_titles = _collect_user_titles(user, resume_doc)
     user_level = user.get("seniority_level")
-    user_location = user.get("location")
     user_years = user.get("years_of_experience")
-
-    user_education = None
-    if resume_doc:
-        profile = resume_doc.get("editable_profile") or {}
-        education = profile.get("education") or []
-        if education:
-            user_education = education[0].get("degree")
+    user_country = user.get("country_iso")
 
     # Query Pinecone for top similar jobs
     _progress("searching", "Searching jobs in Pinecone...", 15)
@@ -369,51 +343,42 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     ).to_list(length=None)
     job_lookup = {j["_id"]: j for j in job_docs}
 
-    # Build score map from Pinecone similarity
+    # Pinecone cosine per job = the semantic (role/skills) relevance signal
     similarity_map = {m.id: m.score for m in results.matches}
 
     _progress("scoring", f"Scoring {len(job_docs)} candidate jobs...", 35)
 
-    user_skills = _collect_user_skills(user, resume_doc)
-    idf_weights = compute_idf(job_docs)
-
-    # Stage 2: Structured scoring on Pinecone results
+    # Stage 2: hard gates (seniority, country, years) + blended score. A job
+    # failing any gate is dropped; survivors get seniority/country/years grades
+    # averaged with the cosine into a 0-100 match. The blend is also the rank.
     scored = []
-    for job_id, vector_score in similarity_map.items():
+    for job_id, cosine in similarity_map.items():
         job = job_lookup.get(job_id)
         if not job:
             continue
 
-        # Hard filter: never surface jobs 2+ seniority levels away
-        if not seniority_gate(user_level, job.get("seniority_level")):
+        # Relevance floor: drop semantically unrelated jobs before the gate
+        # grades can inflate them to a high blended score.
+        if cosine < MIN_RELEVANCE:
             continue
 
-        signals = {
-            "skills_match": skills_match_score(user_skills, job.get("skills") or [], idf_weights),
-            "semantic_fit": vector_score,
-            "title_similarity": title_similarity_score(user_titles, job.get("title", "")),
-            "seniority_fit": seniority_fit_score(user_level, job.get("seniority_level")),
-            "location_match": location_match_score(user_location, job.get("country"), job.get("is_remote")),
-            "experience_fit": experience_fit_score(user_years, job.get("required_experience_years")),
-        }
-
-        score = compute_total(signals)
-        if score < 25:
+        sen = seniority_score(user_level, job.get("seniority_level"))
+        if sen is None:
+            continue
+        cty = country_score(user_country, job.get("country"), job.get("is_remote"))
+        if cty is None:
+            continue
+        yrs = years_score(user_years, job.get("required_experience_years"))
+        if yrs is None:
             continue
 
-        stretch = is_stretch_match(
-            user_years, job.get("required_experience_years"),
-            user_education, job.get("required_education"),
-        )
-        if stretch:
-            score = min(score, 40)
+        signals = {"seniority": sen, "country": cty, "years": yrs, "relevance": cosine}
 
         scored.append({
             "_id": f"{user['_id']}_{job['_id']}",
             "user_id": user["_id"],
             "job_id": job["_id"],
-            "score": score,
-            "is_stretch": stretch,
+            "score": match_percent(sen, cty, yrs, cosine),
             "signals": signals,
             "computed_at": datetime.now(timezone.utc),
         })
@@ -421,59 +386,25 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     scored.sort(key=lambda x: x["score"], reverse=True)
     top_matches = scored[:TOP_N_STRUCTURED]
 
-    # Stage 3: AI refinement on top 20
+    # Stage 3: LLM writes reason / strengths / skills_gap for the top matches.
+    # Explanation only — it does not score or re-rank.
     _progress("ai_refining", f"AI analyzing top {min(len(top_matches), TOP_N_AI)} matches...", 60)
     if run_ai and top_matches:
         ai_results = await _ai_refine(user, resume_doc, job_lookup, top_matches[:TOP_N_AI])
         for match in top_matches:
             _merge_ai_result(match, ai_results.get(match["job_id"]))
 
-        top_matches.sort(key=lambda x: x.get("ai_score") or x["score"], reverse=True)
-
     return top_matches
 
 
 def _merge_ai_result(match: dict, ai: Optional[dict]) -> None:
-    """Apply an AI refinement result onto a match.
-
-    Only a positive ai_score is persisted. A 0 or missing score is left unset
-    so every consumer (frontend `ai_score ?? score`, the analyze-cache
-    freshness check) falls back to the structured score instead of rendering a
-    misleading 0% match.
-    """
+    """Attach the LLM's explanation (reason / strengths / skills_gap) to a
+    match. The LLM does not score; the blended structured score stands."""
     if not ai:
         return
-    score = ai.get("ai_score")
-    if isinstance(score, (int, float)) and score > 0:
-        match["ai_score"] = int(score)
     match["ai_reason"] = ai.get("reason")
     match["skills_gap"] = ai.get("skills_gap", [])
     match["strengths"] = ai.get("strengths", [])
-
-
-def _collect_user_skills(user: dict, resume_doc: Optional[dict] = None) -> List[str]:
-    """Union of users-doc skills, parsed-resume skills, and experience
-    technologies (same sources as _build_candidate_summary)."""
-    skills = list(user.get("skills") or [])
-
-    profile = (resume_doc or {}).get("editable_profile") or {}
-    for s in (profile.get("skills") or []):
-        if isinstance(s, dict) and s.get("name"):
-            skills.append(s["name"])
-    for exp in (profile.get("experiences") or []):
-        for tech in (exp.get("technologies") or []):
-            if tech:
-                skills.append(tech)
-
-    deduped = []
-    seen = set()
-    for skill in skills:
-        key = skill.lower().strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(skill)
-    return deduped
 
 
 def _collect_user_titles(user: dict, resume_doc: Optional[dict] = None) -> List[str]:
@@ -506,7 +437,6 @@ def _is_intern_position(position: str) -> bool:
 
 class _AIMatchScore(BaseModel):
     job_id: str
-    ai_score: int
     reason: str
     skills_gap: List[str]
     strengths: List[str]
@@ -593,9 +523,9 @@ async def _ai_refine(
     prompt = (
         f"Candidate profile: {user_summary}\n\n"
         f"Jobs to evaluate:\n{json.dumps(jobs_block, default=str)}\n\n"
-        "For each job return job_id, ai_score (0-100 overall fit), a one-sentence "
-        "reason, skills_gap (skills the candidate lacks), and strengths (relevant "
-        "candidate skills)."
+        "For each job return job_id, a one-sentence reason this job fits the "
+        "candidate, skills_gap (skills the candidate lacks), and strengths "
+        "(relevant candidate skills)."
     )
 
     try:

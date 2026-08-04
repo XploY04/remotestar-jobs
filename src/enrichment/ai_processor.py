@@ -34,7 +34,8 @@ MAX_RAW_CHARS_PER_JOB = 40_000
 # v3: country tightened to ISO 3166 alpha-2 lowercase via Literal enum.
 # v4: AI now produces a long-form description, not only a short summary.
 # v5: added company_tier classification (drives board_rank ordering).
-PROMPT_VERSION = "v5"
+# v6: seniority_level is now mandatory (never null) — inferred from title/experience.
+PROMPT_VERSION = "v6"
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,7 @@ class JobExtraction(BaseModel):
     is_remote: bool
     work_arrangement: WorkArrangement
     employment_type: EmploymentType
-    seniority_level: Optional[SeniorityLevel]
+    seniority_level: SeniorityLevel
     category: Category
     salary_min: Optional[float]
     salary_max: Optional[float]
@@ -121,7 +122,7 @@ OUTPUT SCHEMA — every job object must match this structure:
   "is_remote": true or false,
   "work_arrangement": "remote|hybrid|onsite",
   "employment_type": "FULLTIME|PARTTIME|CONTRACT|INTERN|TEMPORARY",
-  "seniority_level": "intern|junior|mid|senior|staff|principal|lead|manager or null",
+  "seniority_level": "intern|junior|mid|senior|staff|principal|lead|manager (always required, never null)",
   "category": "backend|frontend|fullstack|mobile|devops|sre|data|ml|security|qa|design|product|general",
   "salary_min": number or null,
   "salary_max": number or null,
@@ -154,8 +155,9 @@ EXTRACTION RULES:
 16. For "benefits": Health insurance, 401k, PTO, equity, etc. Max 10.
 17. For "visa_sponsorship": "yes" ONLY if explicitly mentioned. "unknown" if not discussed.
 18. Max 20 skills, 8 responsibilities, 10 benefits.
-19. For "company_tier": Classify the COMPANY (not the role). "top_tech" = globally famous large tech companies (Google, Meta, Apple, Amazon, Microsoft, Netflix, Nvidia and peers). "hot_startup" = well-known high-profile startups/scaleups (OpenAI, Anthropic, Notion, Stripe, Figma and similar). "established" = other recognizable mid/large companies (IT services firms, banks, older unicorns). "other" = everything else or unknown companies.
-20. For SINGLE job requests: return a JSON object. For BATCH requests: return {"jobs": [...]} with the array in the same order as the input."""
+19. For "seniority_level": ALWAYS output one of intern|junior|mid|senior|staff|principal|lead|manager — never null. Infer from the title's level qualifier (Sr/Senior->senior, Jr/Junior/Associate->junior, Lead/Tech Lead->lead, Staff->staff, Principal->principal, Manager/Director/Head->manager, Intern/Trainee->intern). If the title has no qualifier, infer from required experience: 0->intern, 1-2->junior, 3-5->mid, 6-9->senior, 10+->staff.
+20. For "company_tier": Classify the COMPANY (not the role). "top_tech" = globally famous large tech companies (Google, Meta, Apple, Amazon, Microsoft, Netflix, Nvidia and peers). "hot_startup" = well-known high-profile startups/scaleups (OpenAI, Anthropic, Notion, Stripe, Figma and similar). "established" = other recognizable mid/large companies (IT services firms, banks, older unicorns). "other" = everything else or unknown companies.
+21. For SINGLE job requests: return a JSON object. For BATCH requests: return {"jobs": [...]} with the array in the same order as the input."""
 
 
 class AIProcessor:

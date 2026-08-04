@@ -3,7 +3,6 @@ from src.services.matcher import (
     _collect_user_titles,
     _merge_ai_result,
 )
-from src.services.match_scorer import seniority_fit_score
 
 
 def test_candidate_summary_uses_resume_when_users_doc_is_empty():
@@ -28,19 +27,14 @@ def test_candidate_summary_falls_back_to_users_doc_skills():
     assert "Spark, SQL" in summary
 
 
-def test_merge_ai_result_drops_zero_score_so_ui_falls_back_to_structured():
-    # AI returned 0 (e.g. empty profile). ai_score must NOT be persisted, so the
-    # frontend's `ai_score ?? score` shows the real structured score, not 0%.
+def test_merge_ai_result_attaches_explanation_only():
+    # The LLM is explanation-only now: it attaches reason/strengths/skills_gap
+    # and never a score. The blended structured score stands untouched.
     match = {"score": 60}
-    _merge_ai_result(match, {"ai_score": 0, "reason": "n/a", "skills_gap": [], "strengths": []})
+    _merge_ai_result(match, {"reason": "great fit", "skills_gap": ["Rust"], "strengths": ["Go"]})
     assert "ai_score" not in match
-    assert match["ai_reason"] == "n/a"
-
-
-def test_merge_ai_result_keeps_positive_score():
-    match = {"score": 60}
-    _merge_ai_result(match, {"ai_score": 85, "reason": "great fit", "skills_gap": ["Rust"], "strengths": ["Go"]})
-    assert match["ai_score"] == 85
+    assert match["score"] == 60
+    assert match["ai_reason"] == "great fit"
     assert match["skills_gap"] == ["Rust"]
     assert match["strengths"] == ["Go"]
 
@@ -69,9 +63,3 @@ def test_collect_user_titles_includes_resume_positions_and_skips_interns():
         "Junior Backend Developer",
         "Platform Engineer",
     ]
-
-
-def test_seniority_fit_supports_legacy_and_canonical_values():
-    assert seniority_fit_score("Mid-Level", "mid") == 1.0
-    assert seniority_fit_score("Junior", "junior") == 1.0
-    assert seniority_fit_score("senior", "Senior") == 1.0
