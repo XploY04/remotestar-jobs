@@ -32,7 +32,6 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-MATCH_CREDIT_COST = 50
 PINECONE_INDEX = settings.pinecone_index or "remotestar"
 PINECONE_NAMESPACE = settings.pinecone_namespace or "jobs-pool"
 EMBEDDING_MODEL = "text-embedding-3-large"
@@ -247,7 +246,7 @@ async def embed_jobs(job_ids: Optional[List[str]] = None) -> Dict[str, Any]:
 # ------------------------------------------------------------------
 
 async def run_matching_for_all() -> Dict[str, Any]:
-    """Weekly batch: match jobs for all users with job_matching_enabled=true."""
+    """Weekly batch: refresh matches for every user who opted in."""
 
     users = await _get_matching_users()
     logger.info("Found %d users with job_matching_enabled=true", len(users))
@@ -257,31 +256,18 @@ async def run_matching_for_all() -> Dict[str, Any]:
 
     total_matches = 0
     users_processed = 0
-    users_skipped = 0
 
     for user in users:
-        credits = user.get("credits", 0)
-        if credits < MATCH_CREDIT_COST:
-            logger.info("Skipping user %s: insufficient credits (%d), pausing matching", user["_id"], credits)
-            await _pause_matching(user)
-            users_skipped += 1
-            continue
-
-        deducted = await _deduct_credits(user["_id"], user.get("email", ""))
-        if not deducted:
-            users_skipped += 1
-            continue
-
         matches = await _compute_matches(user, run_ai=True)
         await _save_matches(user["_id"], matches)
 
         total_matches += len(matches)
         users_processed += 1
-        logger.info("User %s: %d matches (credits deducted)", user["_id"], len(matches))
+        logger.info("User %s: %d matches computed", user["_id"], len(matches))
 
     summary = {
         "users_processed": users_processed,
-        "users_skipped": users_skipped,
+        "users_skipped": 0,
         "total_matches": total_matches,
         "ran_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -576,59 +562,9 @@ async def _get_matching_users() -> List[dict]:
     cursor = db.db["users"].find(
         {"job_matching_enabled": True},
         {"skills": 1, "role_focus": 1, "seniority_level": 1, "location": 1,
-         "years_of_experience": 1, "email": 1, "credits": 1, "first_name": 1},
+         "years_of_experience": 1, "country_iso": 1},
     )
     return await cursor.to_list(length=None)
-
-
-async def _pause_matching(user: dict) -> None:
-    """Auto-disable matching and send notification email."""
-    user_id = user["_id"]
-    email = user.get("email", "")
-    first_name = user.get("first_name", "there")
-    credits = user.get("credits", 0)
-
-    # Disable toggle and set paused reason
-    await db.db["users"].update_one(
-        {"_id": user_id},
-        {"$set": {
-            "job_matching_enabled": False,
-            "job_matching_paused_reason": "insufficient_credits",
-        }},
-    )
-
-    # Get previous match count for the email
-    match_count = await db.db["job_matches"].count_documents({"user_id": user_id})
-
-    # Send email
-    from src.services.email_service import send_matching_paused_email
-    send_matching_paused_email(email, first_name, credits, match_count)
-
-    logger.info("Paused matching for user %s, email sent to %s", user_id, email)
-
-
-async def _deduct_credits(user_id: str, email: str) -> bool:
-    user = await db.db["users"].find_one({"_id": user_id})
-    if not user or user.get("credits", 0) < MATCH_CREDIT_COST:
-        return False
-
-    new_balance = user["credits"] - MATCH_CREDIT_COST
-    result = await db.db["users"].update_one(
-        {"_id": user_id, "credits": {"$gte": MATCH_CREDIT_COST}},
-        {"$inc": {"credits": -MATCH_CREDIT_COST}},
-    )
-    if result.modified_count == 0:
-        return False
-
-    await db.db["ledger"].insert_one({
-        "user_id": user_id,
-        "email": email,
-        "spent_for": "job_matching",
-        "credit_spent": -MATCH_CREDIT_COST,
-        "running_balance": new_balance,
-        "created_at": datetime.now(timezone.utc),
-    })
-    return True
 
 
 async def _save_matches(user_id: str, matches: List[dict]) -> None:
