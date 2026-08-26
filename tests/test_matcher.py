@@ -46,6 +46,38 @@ async def test_matching_for_all_does_not_require_or_deduct_credits(monkeypatch):
     assert result["total_matches"] == 2
 
 
+@pytest.mark.asyncio
+async def test_compute_matches_fails_when_providers_are_unavailable(monkeypatch):
+    monkeypatch.setattr(matcher.settings, "openai_api_key", None)
+    monkeypatch.setattr(matcher.settings, "pinecone_api_key", "configured")
+
+    with pytest.raises(matcher.MatchingUnavailableError):
+        await matcher._compute_matches({"_id": "user-1"})
+
+
+@pytest.mark.asyncio
+async def test_matching_for_all_does_not_replace_matches_when_unavailable(monkeypatch):
+    saved = []
+
+    async def get_users():
+        return [{"_id": "user-1"}]
+
+    async def unavailable(user, run_ai=False, progress_fn=None):
+        raise matcher.MatchingUnavailableError("unavailable")
+
+    async def save(user_id, matches):
+        saved.append((user_id, matches))
+
+    monkeypatch.setattr(matcher, "_get_matching_users", get_users)
+    monkeypatch.setattr(matcher, "_compute_matches", unavailable)
+    monkeypatch.setattr(matcher, "_save_matches", save)
+
+    with pytest.raises(matcher.MatchingUnavailableError):
+        await matcher.run_matching_for_all()
+
+    assert saved == []
+
+
 def test_candidate_summary_uses_resume_when_users_doc_is_empty():
     # The real-world case: users doc is blank, all data lives in the resume.
     user = {"role_focus": "Senior Software Engineer", "skills": [],

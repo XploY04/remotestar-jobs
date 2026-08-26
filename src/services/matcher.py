@@ -309,8 +309,9 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
             progress_fn(stage, message, progress, **extra)
 
     if not settings.openai_api_key or not settings.pinecone_api_key:
-        logger.warning("OpenAI or Pinecone not configured, cannot match")
-        return []
+        raise MatchingUnavailableError(
+            "Job matching is temporarily unavailable. Please try again in a minute."
+        )
 
     # Build user embedding
     resume_doc = await db.db["resumes"].find_one({"user_id": user["_id"]})
