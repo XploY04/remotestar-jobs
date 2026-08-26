@@ -1,8 +1,49 @@
+import pytest
+
+from src.services import matcher
 from src.services.matcher import (
     _build_candidate_summary,
     _collect_user_titles,
     _merge_ai_result,
 )
+
+
+@pytest.mark.asyncio
+async def test_matching_for_all_does_not_require_or_deduct_credits(monkeypatch):
+    users = [
+        {"_id": "user-with-zero", "credits": 0},
+        {"_id": "user-without-credit-field"},
+    ]
+    computed = []
+    saved = []
+
+    async def get_users():
+        return users
+
+    async def compute(user, run_ai=False, progress_fn=None):
+        computed.append((user["_id"], run_ai))
+        return [{"job_id": f"job-for-{user['_id']}"}]
+
+    async def save(user_id, matches):
+        saved.append((user_id, matches))
+
+    monkeypatch.setattr(matcher, "_get_matching_users", get_users)
+    monkeypatch.setattr(matcher, "_compute_matches", compute)
+    monkeypatch.setattr(matcher, "_save_matches", save)
+
+    result = await matcher.run_matching_for_all()
+
+    assert computed == [
+        ("user-with-zero", True),
+        ("user-without-credit-field", True),
+    ]
+    assert [user_id for user_id, _ in saved] == [
+        "user-with-zero",
+        "user-without-credit-field",
+    ]
+    assert result["users_processed"] == 2
+    assert result["users_skipped"] == 0
+    assert result["total_matches"] == 2
 
 
 def test_candidate_summary_uses_resume_when_users_doc_is_empty():

@@ -1,19 +1,14 @@
 import pytest
-import os
 from fastapi.testclient import TestClient
 from src.api.main import create_app
 
 
-# Create test app with lifecycle - disable scheduler for tests
 @pytest.fixture
 def client():
     """Create test client with app lifecycle"""
-    # Disable scheduler during tests to avoid event loop issues
-    os.environ['DISABLE_SCHEDULER'] = '1'
     app = create_app()
     with TestClient(app) as c:
         yield c
-    del os.environ['DISABLE_SCHEDULER']
 
 
 def test_health_endpoint(client):

@@ -22,11 +22,6 @@ class Settings(BaseSettings):
     redis_url: Optional[str] = None
     serpapi_key: Optional[str] = None
 
-    # Email (Gmail SMTP)
-    email_user: Optional[str] = None
-    email_password: Optional[str] = None
-    candidate_app_url: str = "https://candidate.remotestar.io"
-
     # AI Enrichment
     enable_ai_enrichment: bool = True
 
@@ -53,7 +48,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     port: int = 8000  # Railway/Render inject PORT
     api_port: int = 8000  # Legacy alias
-    ingestion_interval_minutes: int = 30
 
     class Config:
         env_file = ".env"
