@@ -10,7 +10,7 @@ candidate API.
 
 ## What it does
 
-- Fetches jobs from RemoteOK, JSearch, Adzuna, Hacker News, RSS feeds, and
+- Fetches jobs from RemoteOK, JSearch, Hacker News, RSS feeds, and
   public ATS APIs.
 - Uses OpenAI structured output to map source payloads into one job schema.
 - Saves each completed enrichment batch immediately and skips known jobs before

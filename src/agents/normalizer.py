@@ -107,23 +107,6 @@ class NormalizerAgent:
                 'remote': 'job_is_remote',
             }
         },
-        'adzuna': {
-            'source_id': 'id',
-            'title': 'title',
-            'company': 'company.display_name',
-            'description': 'description',
-            'employment_type': 'contract_type',
-            'salary_min': 'salary_min',
-            'salary_max': 'salary_max',
-            'salary_currency': 'salary_currency',
-            'apply_url': 'redirect_url',
-            'posted_at': 'created',
-            'location': {
-                'city': 'location.display_name',
-                'country': '_country',  # Passed in context
-                'remote': None,  # Derived from location text
-            }
-        },
         'remoteok': {
             'source_id': 'id',
             'title': 'position',
@@ -193,9 +176,9 @@ class NormalizerAgent:
         Normalize a job from any source to standard schema.
         
         Args:
-            source: Source name (jsearch, adzuna, remoteok, hackernews, rss)
+            source: Source name (jsearch, remoteok, hackernews, rss)
             raw_job: Raw job data from source
-            context: Additional context (e.g., country for Adzuna)
+            context: Additional source context
             
         Returns:
             Normalized job dict or None if validation fails
@@ -230,11 +213,7 @@ class NormalizerAgent:
                 
                 # Special handling for salary currency (default based on source)
                 if std_field == 'salary_currency' and not value:
-                    if source == 'adzuna' and context:
-                        country = context.get('country', 'us')
-                        value = "USD" if country == "us" else "GBP"
-                    else:
-                        value = "USD"
+                    value = "USD"
                 
                 normalized[std_field] = value
 
@@ -298,7 +277,7 @@ class NormalizerAgent:
             if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
                 return datetime.fromtimestamp(int(value), tz=timezone.utc)
             
-            # ISO string (JSearch, Adzuna)
+            # ISO string (JSearch and ATS feeds)
             if isinstance(value, str):
                 return parser.isoparse(value)
             

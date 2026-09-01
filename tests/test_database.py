@@ -188,6 +188,8 @@ def test_active_job_filter_is_default_query_base():
 
     assert query["is_archived"] == {"$ne": True}
     assert query["is_deleted"] == {"$ne": True}
+    assert query["is_unlisted"] == {"$ne": True}
+    assert query["is_user_private"] == {"$ne": True}
     assert query["$or"][0] == {"application_deadline": None}
     assert "$gte" in query["$or"][1]["application_deadline"]
 
