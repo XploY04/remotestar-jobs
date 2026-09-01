@@ -11,7 +11,6 @@ import yaml
 from src.agents import BaseFetcher
 from src.agents.remoteok import RemoteOKFetcher
 from src.agents.jsearch import JSearchFetcher
-from src.agents.adzuna import AdzunaFetcher
 from src.agents.hackernews import HackerNewsFetcher
 from src.agents.rss_feed import RSSFeedFetcher
 from src.agents.ats_scraper import ATSScraperFetcher
@@ -22,7 +21,6 @@ logger = setup_logger(__name__)
 FETCHER_MAP: dict[str, Type[BaseFetcher]] = {
     "remoteok": RemoteOKFetcher,
     "jsearch": JSearchFetcher,
-    "adzuna": AdzunaFetcher,
     "hackernews": HackerNewsFetcher,
     "rss_feed": RSSFeedFetcher,
     "ats_scraper": ATSScraperFetcher,

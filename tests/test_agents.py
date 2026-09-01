@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.agents.adzuna import AdzunaFetcher
 from src.agents.jsearch import JSearchFetcher
 from src.agents.remoteok import RemoteOKFetcher
 from src.services.query_planner import QueryPlan, SourceQuery
@@ -42,14 +41,6 @@ async def test_jsearch_fetcher_initialization():
 
 
 @pytest.mark.asyncio
-async def test_adzuna_fetcher_initialization():
-    fetcher = AdzunaFetcher()
-
-    assert fetcher.source_name == "adzuna"
-    assert hasattr(fetcher, "fetch_jobs")
-
-
-@pytest.mark.asyncio
 async def test_base_fetcher_keyword_filtering():
     from src.agents import BaseFetcher
 
@@ -79,16 +70,6 @@ def test_jsearch_accepts_query_plan():
     assert fetcher._source_queries() == plan.queries
 
 
-def test_adzuna_accepts_query_plan():
-    fetcher = AdzunaFetcher()
-    plan = _plan("adzuna")
-
-    fetcher.set_query_plan(plan)
-
-    assert fetcher._source_queries() == plan.queries
-    assert fetcher._countries() == ["gb"]
-
-
 def test_jsearch_dedupes_raw_jobs():
     fetcher = JSearchFetcher()
     jobs = [{"job_id": "1"}, {"job_id": "1"}, {"job_id": "2"}]
@@ -96,36 +77,11 @@ def test_jsearch_dedupes_raw_jobs():
     assert fetcher._dedupe_jobs(jobs) == [{"job_id": "1"}, {"job_id": "2"}]
 
 
-def test_adzuna_dedupes_raw_jobs():
-    fetcher = AdzunaFetcher()
-    jobs = [{"id": "1"}, {"id": "1"}, {"id": "2"}]
-
-    assert fetcher._dedupe_jobs(jobs) == [{"id": "1"}, {"id": "2"}]
-
-
 def test_import_all_agents():
     from src.agents import BaseFetcher
-    from src.agents.adzuna import AdzunaFetcher
     from src.agents.jsearch import JSearchFetcher
     from src.agents.remoteok import RemoteOKFetcher
 
     assert RemoteOKFetcher is not None
     assert JSearchFetcher is not None
-    assert AdzunaFetcher is not None
     assert BaseFetcher is not None
-
-
-def test_adzuna_page_to_text_strips_scripts_and_caps():
-    from src.agents.adzuna import AdzunaFetcher
-
-    html = """
-    <html><head><style>.x{color:red}</style>
-    <script>var tracking = "junk";</script></head>
-    <body><h1>Backend  Intern</h1><p>Build   APIs with <b>Python</b>.</p>
-    <noscript>enable js</noscript></body></html>
-    """
-    text = AdzunaFetcher._page_to_text(html)
-    assert text == "Backend Intern Build APIs with Python ."
-    assert "tracking" not in text and "color" not in text
-
-    assert len(AdzunaFetcher._page_to_text("<p>" + "a" * 50_000 + "</p>")) == AdzunaFetcher.PAGE_TEXT_CAP

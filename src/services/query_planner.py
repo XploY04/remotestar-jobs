@@ -24,7 +24,6 @@ COUNTRY_TERMS = {
 
 SOURCE_COUNTRY_MAP = {
     "jsearch": {"IN": "IN", "GB": "GB", "US": "US"},
-    "adzuna": {"IN": "in", "GB": "gb", "US": "us"},
     "ats_discovery": {"IN": "India", "GB": "UK", "US": "United States"},
 }
 
@@ -107,7 +106,7 @@ class QueryPlan:
 class QueryPlannerService:
     """Generate source query plans with OpenAI, or deterministic fallback plans."""
 
-    PLANNED_SOURCES = {"jsearch", "adzuna", "ats_scraper"}
+    PLANNED_SOURCES = {"jsearch", "ats_scraper"}
     SOURCE_ALIASES = {"ats_scraper": "ats_discovery"}
 
     def __init__(self, target_config: Optional[TargetConfig] = None) -> None:

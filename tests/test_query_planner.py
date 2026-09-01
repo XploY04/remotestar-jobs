@@ -17,7 +17,6 @@ async def test_fallback_plan_covers_all_target_countries():
 
 def test_country_mapping_is_source_specific():
     assert QueryPlannerService.map_country("jsearch", "GB") == "GB"
-    assert QueryPlannerService.map_country("adzuna", "GB") == "gb"
     assert QueryPlannerService.map_country("ats_discovery", "GB") == "UK"
 
 
@@ -32,14 +31,14 @@ def test_parse_queries_caps_and_validates_model_output():
         ]
     }
 
-    queries = planner._parse_queries("adzuna", raw_plan)
+    queries = planner._parse_queries("jsearch", raw_plan)
 
     assert len(queries) == 3
-    assert queries[0].country == "gb"
+    assert queries[0].country == "GB"
     assert queries[0].priority == 10
     assert queries[0].max_pages == 3
-    assert queries[1].country == "us"
-    assert queries[2].country == "in"
+    assert queries[1].country == "US"
+    assert queries[2].country == "IN"
 
 
 def test_ats_fallback_uses_location_terms():

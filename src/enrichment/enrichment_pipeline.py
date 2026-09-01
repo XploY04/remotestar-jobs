@@ -264,28 +264,6 @@ class EnrichmentPipeline:
                     "key_responsibilities": self._extract_highlights_responsibilities(raw.get("job_highlights")),
                 }
 
-            elif source == "adzuna":
-                company_obj = raw.get("company") or {}
-                location_obj = raw.get("location") or {}
-                extracted = {
-                    "title": raw.get("title", ""),
-                    "company": company_obj.get("display_name", "Unknown") if isinstance(company_obj, dict) else str(company_obj),
-                    "description": raw.get("description", ""),
-                    "city": location_obj.get("display_name") if isinstance(location_obj, dict) else None,
-                    "country": raw.get("_adzuna_country", ""),
-                    "is_remote": self._detect_remote_from_text(raw.get("title", "") + " " + raw.get("description", "")),
-                    "work_arrangement": "remote" if self._detect_remote_from_text(raw.get("title", "") + " " + raw.get("description", "")) else "onsite",
-                    "employment_type": (raw.get("contract_type") or "FULLTIME").upper(),
-                    "salary_min": self._to_str(raw.get("salary_min")),
-                    "salary_max": self._to_str(raw.get("salary_max")),
-                    "salary_currency": raw.get("salary_currency") or ("GBP" if raw.get("_adzuna_country") == "gb" else "USD"),
-                    "apply_url": raw.get("redirect_url", ""),
-                    "posted_at": self._parse_iso(raw.get("created")),
-                    "latitude": raw.get("latitude"),
-                    "longitude": raw.get("longitude"),
-                    "tags": [raw.get("category", {}).get("label")] if isinstance(raw.get("category"), dict) else [],
-                }
-
             elif source == "hackernews":
                 extracted = {
                     "title": raw.get("title", ""),

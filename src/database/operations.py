@@ -219,6 +219,8 @@ class Database:
         return {
             "is_archived": {"$ne": True},
             "is_deleted": {"$ne": True},
+            "is_unlisted": {"$ne": True},
+            "is_user_private": {"$ne": True},
             "$or": [
                 {"application_deadline": None},
                 {"application_deadline": {"$gte": now}},
@@ -373,7 +375,7 @@ class Database:
 
         raw_by_query: Dict[str, int] = {}
         for job in raw_jobs:
-            key = job.get("_query") or job.get("_jsearch_query") or job.get("_adzuna_query") or "unknown"
+            key = job.get("_query") or job.get("_jsearch_query") or "unknown"
             raw_by_query[key] = raw_by_query.get(key, 0) + 1
 
         country_counts: Dict[str, int] = {}
@@ -400,7 +402,7 @@ class Database:
             "seniority_counts": seniority_counts,
         })
 
-    async def cleanup_expired_jobs(self, default_expiry_days: int = 45) -> Dict[str, int]:
+    async def cleanup_expired_jobs(self, default_expiry_days: int = 15) -> Dict[str, int]:
         """Soft-delete jobs past their application_deadline or default age."""
 
         if self.db is None:

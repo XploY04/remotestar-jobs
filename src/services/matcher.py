@@ -327,7 +327,7 @@ async def _compute_matches(user: dict, run_ai: bool = False, progress_fn=None) -
     user_country = user.get("country_iso")
 
     # Query Pinecone for top similar jobs
-    _progress("searching", "Searching jobs in Pinecone...", 15)
+    _progress("searching", "Searching for new matches...", 15)
     index = _get_pinecone_index()
     results = index.query(
         vector=user_embedding,

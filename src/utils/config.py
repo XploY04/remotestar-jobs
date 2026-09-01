@@ -13,8 +13,6 @@ class Settings(BaseSettings):
 
     # API Keys
     rapidapi_key: Optional[str] = None
-    adzuna_app_id: Optional[str] = None
-    adzuna_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     pinecone_api_key: Optional[str] = None
     pinecone_index: Optional[str] = None
@@ -29,12 +27,6 @@ class Settings(BaseSettings):
     # the description (Workable, SmartRecruiters mostly).
     enable_ats_detail_fetch: bool = True
     ats_detail_min_description: int = 200
-
-    # Adzuna returns only a description snippet; fetch the redirect_url page
-    # for full text when the description is shorter than this. Snippets run
-    # 300-800 chars, so the bar sits above them; real descriptions skip it.
-    enable_adzuna_detail_fetch: bool = True
-    adzuna_detail_min_description: int = 2000
 
     # Query planning
     enable_query_planner: bool = True
