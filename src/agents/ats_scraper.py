@@ -25,8 +25,6 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Max jobs per company (avoid huge boards like Google blowing up AI cost)
-MAX_JOBS_PER_COMPANY = 50
 # Concurrent requests per platform
 CONCURRENCY = 5
 # Concurrent detail fetches per company
@@ -169,7 +167,7 @@ class ATSScraperFetcher(BaseFetcher):
             data = await resp.json()
 
         jobs = []
-        for item in data.get("jobs", [])[:MAX_JOBS_PER_COMPANY]:
+        for item in data.get("jobs", []):
             location_name = item.get("location", {}).get("name", "") if isinstance(item.get("location"), dict) else ""
             description = item.get("content", "") or ""
 
@@ -218,7 +216,7 @@ class ATSScraperFetcher(BaseFetcher):
         self, session: aiohttp.ClientSession, slug: str, company_name: str
     ) -> List[Dict[str, Any]]:
         """Fetch jobs from Lever public API."""
-        url = f"https://api.lever.co/v0/postings/{slug}?mode=json&limit={MAX_JOBS_PER_COMPANY}"
+        url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
 
         async with session.get(url) as resp:
             if resp.status == 404:
@@ -232,7 +230,7 @@ class ATSScraperFetcher(BaseFetcher):
             return []
 
         jobs = []
-        for item in data[:MAX_JOBS_PER_COMPANY]:
+        for item in data:
             categories = item.get("categories", {}) or {}
             location = categories.get("location", "") or ""
             description_parts = []
@@ -316,7 +314,7 @@ class ATSScraperFetcher(BaseFetcher):
             return []
 
         jobs = []
-        for item in jobs_data[:MAX_JOBS_PER_COMPANY]:
+        for item in jobs_data:
             location = item.get("location", "") or ""
             is_remote = item.get("isRemote", False) or bool(
                 re.search(r"\bremote\b", location, re.I)
@@ -367,7 +365,7 @@ class ATSScraperFetcher(BaseFetcher):
 
         results = data.get("results", [])
         jobs = []
-        for item in results[:MAX_JOBS_PER_COMPANY]:
+        for item in results:
             location = item.get("location", {}) or {}
             city = location.get("city", "") or ""
             country = location.get("country", "") or ""
@@ -423,22 +421,29 @@ class ATSScraperFetcher(BaseFetcher):
     ) -> List[Dict[str, Any]]:
         """Fetch jobs from SmartRecruiters public API."""
         url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
-        params = {"limit": MAX_JOBS_PER_COMPANY}
+        # The API returns at most 100 postings per request.
+        page_size = 100
+        content: List[Dict[str, Any]] = []
 
         try:
-            async with session.get(url, params=params) as resp:
-                if resp.status == 404:
-                    await self.discovery.mark_company_inactive("smartrecruiters", slug)
-                    return []
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
+            while True:
+                params = {"limit": page_size, "offset": len(content)}
+                async with session.get(url, params=params) as resp:
+                    if resp.status == 404:
+                        await self.discovery.mark_company_inactive("smartrecruiters", slug)
+                        return []
+                    if resp.status != 200:
+                        return []
+                    data = await resp.json()
+                page = data.get("content", [])
+                content.extend(page)
+                if len(page) < page_size or len(content) >= data.get("totalFound", 0):
+                    break
         except Exception:
             return []
 
-        content = data.get("content", [])
         jobs = []
-        for item in content[:MAX_JOBS_PER_COMPANY]:
+        for item in content:
             location = item.get("location", {}) or {}
             city = location.get("city", "") or ""
             country = location.get("country", "") or ""
