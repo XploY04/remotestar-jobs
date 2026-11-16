@@ -402,7 +402,7 @@ class Database:
             "seniority_counts": seniority_counts,
         })
 
-    async def cleanup_expired_jobs(self, default_expiry_days: int = 15) -> Dict[str, int]:
+    async def cleanup_expired_jobs(self, default_expiry_days: int = 60) -> Dict[str, int]:
         """Soft-delete jobs past their application_deadline or default age."""
 
         if self.db is None:
